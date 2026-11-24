@@ -286,7 +286,7 @@ function vRoute() {
   let text = `🚚 ${SHOP.name} – Driver list ${fmtD(today())}\n` + cities.map(c => `\n📍 ${c}\n` + stops[c].map(s => ` • ${s.k}: ${s.p.name} ${s.p.phone} – ${s.t}`).join('\n')).join('');
   return `<div class="card"><h3>Today's route — grouped by town so the driver covers each area in one trip</h3>
   ${cities.map(c => `<div class="card" style="margin-bottom:10px"><b class="gd">📍 ${esc(c)}</b> <span class="mut">(${stops[c].length} stop${stops[c].length > 1 ? 's' : ''})</span>
-   ${stops[c].map(s => `<div style="padding:6px 0;border-bottom:1px solid #1c2c5c">${tag(s.k, s.k === 'Deliver' ? 'green' : 'gold')} <b>${esc(s.p.name)}</b> · ${esc(s.p.phone)} · ${esc(s.p.address)}<br><span class="mut">${esc(s.t)}</span> ${s.late ? tag('DELAYED', 'red') : ''}</div>`).join('')}</div>`).join('') || '<p class="mut">No pending deliveries or pickups 🎉</p>'}
+   ${stops[c].map(s => `<div style="padding:6px 0;border-bottom:1px solid var(--line)">${tag(s.k, s.k === 'Deliver' ? 'green' : 'gold')} <b>${esc(s.p.name)}</b> · ${esc(s.p.phone)} · ${esc(s.p.address)}<br><span class="mut">${esc(s.t)}</span> ${s.late ? tag('DELAYED', 'red') : ''}</div>`).join('')}</div>`).join('') || '<p class="mut">No pending deliveries or pickups 🎉</p>'}
   <h3>Send to driver</h3><div class="msg">${esc(text)}</div><p><a class="btn" style="text-decoration:none;display:inline-block;background:#25d366" target="_blank" href="${waLink((db.employees.find(e => e.role === 'Driver') || {}).phone || '', text)}">Send to driver on WhatsApp</a></p></div>`;
 }
 
