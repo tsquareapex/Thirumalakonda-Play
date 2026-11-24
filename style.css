@@ -45,3 +45,5 @@ tr.overdue td{background:#e5484d1f}tr.overdue td:first-child{border-left:4px sol
 .hint{font-size:12px;color:var(--mut)}
 @media(max-width:800px){#side{position:fixed;left:-240px;z-index:20;transition:.25s}#side.open{left:0}#burger{display:block;padding:6px 10px}#view{padding:14px}}
 @media print{body *{visibility:hidden}.inv,.inv *{visibility:visible}.inv{position:absolute;left:0;top:0;width:100%}}
+
+#login{position:fixed;inset:0;display:grid;place-items:center;background:var(--navy);z-index:100;padding:12px}#login.hidden,#app.hidden{display:none!important}

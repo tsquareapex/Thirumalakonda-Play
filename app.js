@@ -9,24 +9,57 @@ const SHOP = { name: 'Thirumalakonda Plywoods', owner: '9440026692' };
 const KEY = 'tkp_db_v1';
 
 /* ---------- data ---------- */
-let db = JSON.parse(localStorage.getItem(KEY) || 'null');
-const save = () => localStorage.setItem(KEY, JSON.stringify(db));
+const SB_URL = 'https://yynulnhsifaefpjelcls.supabase.co', SB_KEY = 'sb_publishable_rcZ6EJcqqiEp0QUB5FZ1KQ_CPBxzsLg';
+let sb = null, db = null, snap = {}, saving = null;
+const blank = () => ({ seq: {}, nextBill: 1, nextRet: 1, parties: [], bills: [], returns: [], employees: [] });
+
+/* ---------- Supabase persistence (only changed rows are written) ---------- */
+const sig = (row, b) => JSON.stringify([row, b && [b.items, b.pays]]);
+const rowsOf = () => {
+  const r = {};
+  db.parties.forEach(p => r['parties:' + p.id] = ['parties', { id: p.id, type: p.type, name: p.name, phone: p.phone, email: p.email, address: p.address, city: p.city, state: p.state, tolerance_days: p.tol, created_at: p.created }]);
+  db.bills.forEach(b => r['bills:' + b.id] = ['bills', { id: b.id, party_id: b.partyId, bill_date: b.date, total: b.total, delivery: b.delivery }, b]);
+  db.returns.forEach(x => r['returns:' + x.id] = ['returns', { id: x.id, party_id: x.partyId, bill_id: x.billId, item: x.item, qty: x.qty, amount: x.amount, returned_on: x.date, status: x.status }]);
+  db.employees.forEach(e => r['employees:' + e.id] = ['employees', { id: e.id, name: e.name, role: e.role, phone: e.phone }]);
+  Object.entries(db.seq).forEach(([k, v]) => r['code_seq:' + k] = ['code_seq', { prefix: k, last: v }]);
+  return r;
+};
+async function flush() {
+  const rows = rowsOf(), order = ['parties', 'code_seq', 'bills', 'returns', 'employees'];
+  const changed = Object.entries(rows).filter(([k, [, row, b]]) => snap[k] !== sig(row, b));
+  for (const t of order) {
+    for (const [k, [tab, row, b]] of changed) {
+      if (tab !== t) continue;
+      let e = (await sb.from(tab).upsert(row)).error;
+      if (!e && b) {
+        await sb.from('bill_items').delete().eq('bill_id', b.id); await sb.from('payments').delete().eq('bill_id', b.id);
+        if (b.items.length) e = (await sb.from('bill_items').insert(b.items.map(i => ({ bill_id: b.id, code: i.code, description: i.desc, qty: i.qty, price: i.price })))).error;
+        if (!e && b.pays.length) e = (await sb.from('payments').insert(b.pays.map(p => ({ bill_id: b.id, paid_on: p.date, amount: p.amt })))).error;
+      }
+      if (e) { console.error(e); toast('Save failed: ' + e.message); } else snap[k] = sig(row, b);
+    }
+  }
+}
+const save = () => { saving = (saving || Promise.resolve()).then(flush); return saving; };
+async function load() {
+  const q = async t => { const r = await sb.from(t).select('*'); if (r.error) throw r.error; return r.data; };
+  const [ps, bs, it, py, rs, em, sq] = await Promise.all(['parties', 'bills', 'bill_items', 'payments', 'returns', 'employees', 'code_seq'].map(q));
+  db = blank();
+  db.parties = ps.map(p => ({ id: p.id, type: p.type, name: p.name, phone: p.phone || '', email: p.email || '', address: p.address || '', city: p.city || '', state: p.state, tol: p.tolerance_days, created: (p.created_at || '').slice(0, 10) }));
+  db.bills = bs.map(b => ({ id: b.id, partyId: b.party_id, date: b.bill_date, total: +b.total, delivery: b.delivery,
+    items: it.filter(i => i.bill_id === b.id).map(i => ({ code: i.code, desc: i.description, qty: +i.qty, price: +i.price })),
+    pays: py.filter(p => p.bill_id === b.id).map(p => ({ date: p.paid_on, amt: +p.amount })) }));
+  db.returns = rs.map(r => ({ id: r.id, partyId: r.party_id, billId: r.bill_id, item: r.item, qty: +r.qty, amount: +r.amount, date: r.returned_on, status: r.status, driver: '' }));
+  db.employees = em.map(e => ({ id: e.id, name: e.name, role: e.role, phone: e.phone || '' }));
+  sq.forEach(s => db.seq[s.prefix] = s.last);
+  const mx = a => a.reduce((m, x) => Math.max(m, parseInt(String(x.id).replace(/\D/g, '')) || 0), 0) + 1;
+  db.nextBill = mx(db.bills); db.nextRet = mx(db.returns);
+  snap = {}; Object.entries(rowsOf()).forEach(([k, [, row, b]]) => snap[k] = sig(row, b));
+  if (!db.parties.length) { seed(); await save(); }
+}
 function seed() {
-  const d = n => addDays(today(), -n);
-  db = { seq: {}, nextBill: 1, nextRet: 1, parties: [], bills: [], returns: [], employees: [
-    { id: 1, name: 'Ramesh', role: 'Driver', phone: '9000000001' }, { id: 2, name: 'Suresh', role: 'Salesman', phone: '9000000002' },
-    { id: 3, name: 'Mahesh', role: 'Carpenter', phone: '9000000003' }] };
-  const c1 = addParty({ type: 'customer', name: 'Thouhidh', phone: '9494409313', city: 'Dharmavaram', address: 'Main Road', tol: 5 });
-  const c2 = addParty({ type: 'customer', name: 'Ravi Kumar (sample)', phone: '9000011111', city: 'Anantapur', address: 'Subhash Road', tol: 7 });
-  const c3 = addParty({ type: 'customer', name: 'Lakshmi Furnitures (sample)', phone: '9000022222', city: 'Hindupur', address: 'Bus stand', tol: 5 });
-  const v1 = addParty({ type: 'vendor', name: 'Greenply Distributors (sample)', phone: '9000033333', city: 'Hyderabad', state: 'Telangana', address: 'Kukatpally', tol: 15 });
-  addBill(c1, d(20), [{ code: 'PLY-18', desc: 'Marine Plywood 18mm', qty: 10, price: 2100 }, { code: 'LAM-01', desc: 'Laminate Sheet 1mm', qty: 6, price: 1450 }], 15000, 'Delivered');
-  addBill(c1, d(1), [{ code: 'HNG-04', desc: 'Soft-close Hinges (pair)', qty: 20, price: 180 }], 0, 'Pending');
-  addBill(c2, d(10), [{ code: 'PLY-12', desc: 'BWP Plywood 12mm', qty: 15, price: 1500 }], 22500, 'Delivered');
-  addBill(c3, d(3), [{ code: 'PLY-18', desc: 'Marine Plywood 18mm', qty: 8, price: 2100 }, { code: 'ADH-01', desc: 'Fevicol Adhesive 5kg', qty: 4, price: 950 }], 5000, 'Pending');
-  addBill(v1, d(12), [{ code: 'PLY-18', desc: 'Marine Plywood 18mm', qty: 100, price: 1750 }], 100000, 'Delivered');
-  db.returns.push({ id: 'RET-0001', partyId: c1, billId: 'INV-0001', date: d(4), item: 'PLY-18 Marine Plywood 18mm', qty: 1, amount: 2100, status: 'Pending Pickup', driver: '' });
-  db.nextRet = 2; save();
+  db.employees.push({ id: 1, name: 'Ramesh', role: 'Driver', phone: '' });
+  addParty({ type: 'customer', name: 'Thouhidh', phone: '9494409313', city: 'Dharmavaram', address: 'Main Road', tol: 5 });
 }
 function prefix(city, type) {
   const t = RS_TOWNS[city]; let p = t ? t[0] : city.replace(/[^a-z]/gi, '').toUpperCase().slice(0, 3).padEnd(3, 'X');
@@ -45,7 +78,6 @@ function addBill(partyId, date, items, paid, delivery) {
   db.bills.push({ id, partyId, date, items, total, pays: paid > 0 ? [{ date, amt: +paid }] : [], delivery: delivery || 'Pending' });
   return id;
 }
-if (!db) seed();
 
 /* ---------- ledger helpers ---------- */
 const P = id => db.parties.find(p => p.id === id);
@@ -326,5 +358,21 @@ document.addEventListener('submit', e => {
     save(); render(); toast('Return recorded — balance reduced');
   }
 });
-if (location.hash.startsWith('#statement/') && P(location.hash.split('/')[1])) setTimeout(() => statementModal(location.hash.split('/')[1]), 50);
-render();
+/* ---------- login / startup ---------- */
+async function start() {
+  $('#login').classList.add('hidden'); $('#app').classList.remove('hidden');
+  try { await load(); } catch (e) { $('#app').classList.add('hidden'); $('#login').classList.remove('hidden'); $('#lerr').textContent = 'Could not load data: ' + e.message; return; }
+  render();
+  if (location.hash.startsWith('#statement/') && P(location.hash.split('/')[1])) statementModal(location.hash.split('/')[1]);
+}
+$('#lform').onsubmit = async e => {
+  e.preventDefault(); $('#lerr').textContent = '';
+  const { error } = await sb.auth.signInWithPassword({ email: $('#lemail').value.trim(), password: $('#lpass').value });
+  if (error) $('#lerr').textContent = error.message; else start();
+};
+ACT.logout = async () => { await sb.auth.signOut(); location.reload(); };
+(async () => {
+  sb = supabase.createClient(SB_URL, SB_KEY);
+  const { data } = await sb.auth.getSession();
+  if (data.session) start();
+})();

@@ -7,17 +7,24 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
+<div id="login"><form id="lform" class="box" style="max-width:380px"><div class="logo" style="margin:0 auto 10px;width:56px;height:56px;font-size:22px">TP</div>
+<h2 class="gold" style="text-align:center;margin:0 0 4px">Thirumalakonda Plywoods</h2><p class="mut" style="text-align:center;margin-top:0">Staff sign in</p>
+<div class="f"><label>Email</label><input id="lemail" type="email" required></div><div class="f"><label>Password</label><input id="lpass" type="password" required></div>
+<button style="width:100%">Sign in</button><p id="lerr" class="red"></p></form></div>
+<div id="app" class="hidden" style="display:contents">
 <aside id="side">
   <div class="brand"><div class="logo">TP</div><div><b>Thirumalakonda</b><span>PLYWOODS &amp; INTERIORS</span></div></div>
   <nav id="nav"></nav>
-  <div class="owner">Owner<br><b>9440026692</b></div>
+  <div class="owner">Owner<br><b>9440026692</b><br><a data-act="logout" style="cursor:pointer;color:var(--gold2)">Sign out</a></div>
 </aside>
 <main>
   <header id="top"><button id="burger">☰</button><h1 id="title"></h1><div id="topact"></div></header>
   <section id="view"></section>
 </main>
+</div>
 <div id="modal" class="hidden"><div class="box"><button class="x" data-act="closeModal">✕</button><div id="mbody"></div></div></div>
 <div id="toast"></div>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
 <script src="towns.js"></script>
 <script src="app.js"></script>
 </body>
