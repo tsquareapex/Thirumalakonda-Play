@@ -260,13 +260,32 @@ function statementModal(id) {
 }
 
 /* ---------- Returns ---------- */
+/* returnable lines for a customer: only DELIVERED bills; remaining = billed qty - already returned */
+let retCache = [];
+function returnLines(pid) {
+  retCache = [];
+  db.bills.filter(b => b.partyId === pid && b.delivery === 'Delivered').forEach(b => b.items.forEach(i => {
+    const key = i.code + ' ' + i.desc;
+    const done = db.returns.filter(r => r.billId === b.id && r.item === key).reduce((t, r) => t + r.qty, 0);
+    retCache.push({ b: b.id, date: b.date, key, qty: i.qty, done, rem: Math.max(i.qty - done, 0), price: i.price });
+  }));
+  return retCache;
+}
+function retTable(pid) {
+  if (!pid) return '<p class="mut">Select a customer to see the items delivered to them.</p>';
+  const lines = returnLines(pid), pend = db.bills.filter(b => b.partyId === pid && b.delivery !== 'Delivered').length;
+  const rows = lines.map((l, n) => l.rem > 0 ? `<tr><td>${l.b}<br><small class="mut">${fmtD(l.date)}</small></td><td>${esc(l.key)}</td><td class="r">${l.qty}</td><td class="r">${l.done}</td><td class="r"><b>${l.rem}</b></td>
+    <td class="r">${inr(l.price)}</td><td><input type="number" class="rq" data-input="retQty" data-i="${n}" min="0" max="${l.rem}" step="any" value="0" style="width:90px"></td><td class="r" id="rc${n}">₹0</td></tr>` : '').join('');
+  return (rows ? `<div class="scroll"><table><tr><th>Bill</th><th>Item</th><th class="r">Delivered</th><th class="r">Returned</th><th class="r">Can return</th><th class="r">Price</th><th>Return qty</th><th class="r">Credit</th></tr>${rows}</table></div>
+    <p style="font-size:18px">Total credit: <b class="gd" id="retTotal">₹0</b> <span class="hint">· You cannot return more than the delivered quantity.</span></p><button>Save return(s) &amp; deduct from balance</button>`
+    : '<p class="mut">No returnable items — nothing delivered yet, or everything delivered has already been returned.</p>')
+    + (pend ? `<p class="hint">${pend} bill(s) for this customer are not marked Delivered yet; items can be returned only after delivery.</p>` : '');
+}
 function vReturns() {
   const cs = db.parties.filter(p => p.type === 'customer');
-  return `<div class="grid g2"><div class="card"><h3>Record material returned by customer</h3><form data-form="createReturn">
-   <div class="f"><label>Customer</label><select name="party" data-input="retParty" required><option value="">— select —</option>${cs.map(c => `<option value="${c.id}">${esc(c.name)} (${c.id})</option>`).join('')}</select></div>
-   <div class="f"><label>Item (from customer's bills)</label><select name="item" id="retItem"><option>select customer first</option></select></div>
-   <div class="row"><div class="f"><label>Qty</label><input type="number" name="qty" value="1" min="1"></div><div class="f"><label>Credit amount (₹)</label><input type="number" name="amount" id="retAmt" min="0"></div></div>
-   <button>Save return &amp; deduct from balance</button></form></div>
+  return `<div class="grid"><div class="card"><h3>Record material returned by customer (add several items at once)</h3><form data-form="createReturn">
+   <div class="f" style="max-width:420px"><label>Customer</label><select name="party" data-input="retParty" required><option value="">— select —</option>${cs.map(c => `<option value="${c.id}">${esc(c.name)} (${c.id})</option>`).join('')}</select></div>
+   <div id="retLines">${retTable('')}</div></form></div>
    <div class="card scroll"><h3>Return register</h3><table><tr><th>ID</th><th>Customer</th><th>Item</th><th class="r">Credit</th><th>Status</th><th></th></tr>
    ${db.returns.slice().reverse().map(r => `<tr class="${retDelayed(r) ? 'overdue' : ''}"><td>${r.id}<br><small class="mut">${fmtD(r.date)}</small></td><td>${esc(P(r.partyId)?.name)}<br><small class="mut">${esc(P(r.partyId)?.city)}</small></td>
    <td>${esc(r.item)} ×${r.qty}</td><td class="r">${inr(r.amount)}</td><td>${tag(r.status, r.status === 'Pending Pickup' ? (retDelayed(r) ? 'red' : 'gold') : 'green')}${retDelayed(r) ? '<br>' + tag('DELAYED', 'red') : ''}</td>
@@ -346,14 +365,15 @@ document.addEventListener('input', e => {
   if (k === 'place') showSug(e.target);
   if (k === 'calc') recalc();
   if (k === 'fill') { const it = (window.__items || {})[e.target.value]; if (it) { const r = e.target.closest('tr'); r.querySelector('[name=desc]').value = it.desc; r.querySelector('[name=price]').value = it.price; recalc(); } }
-  if (k === 'retParty') {
-    const items = []; db.bills.filter(b => b.partyId === e.target.value).forEach(b => b.items.forEach(i => items.push({ b: b.id, ...i })));
-    $('#retItem').innerHTML = items.map((i, n) => `<option value="${esc(i.b)}|${esc(i.code + ' ' + i.desc)}|${i.price}">${i.b} · ${esc(i.desc)} @ ${inr(i.price)}</option>`).join('') || '<option>No bills</option>';
-    syncRetAmt();
+  if (k === 'retParty') $('#retLines').innerHTML = retTable(e.target.value);
+  if (k === 'retQty') {
+    const l = retCache[+e.target.dataset.i]; let v = parseFloat(e.target.value);
+    if (isNaN(v) || v < 0) v = 0;
+    if (v > l.rem) { v = l.rem; e.target.value = v; toast(`Only ${l.rem} can be returned (delivered ${l.qty}, already returned ${l.done})`); }
+    $('#rc' + e.target.dataset.i).textContent = inr(v * l.price);
+    $('#retTotal').textContent = inr([...document.querySelectorAll('.rq')].reduce((t, x) => t + (parseFloat(x.value) || 0) * retCache[+x.dataset.i].price, 0));
   }
 });
-const syncRetAmt = () => { const s = $('#retItem'); if (s && s.value.includes('|')) $('#retAmt').value = (+s.value.split('|')[2]) * (+document.querySelector('[name=qty]').value || 1); };
-document.addEventListener('change', e => { if (e.target.id === 'retItem') syncRetAmt(); if (e.target.name === 'qty' && $('#retItem')) syncRetAmt(); });
 document.addEventListener('submit', e => {
   const f = e.target.dataset.form; if (!f) return; e.preventDefault();
   const d = Object.fromEntries(new FormData(e.target)), id = e.target.dataset.id;
@@ -367,9 +387,11 @@ document.addEventListener('submit', e => {
     const tot = items.reduce((a, i) => a + i.qty * i.price, 0), bid = addBill(d.party, d.date, items, Math.min(Math.max(+d.paid || 0, 0), tot), d.delivery); save(); sel.customer = d.party; go('bills'); invoiceModal(bid);
   }
   if (f === 'createReturn') {
-    const [bill, item] = (d.item || '').split('|'); if (!bill || !item) return toast('Pick customer & item');
-    db.returns.push({ id: 'RET-' + String(db.nextRet++).padStart(4, '0'), partyId: d.party, billId: bill, date: today(), item, qty: +d.qty, amount: +d.amount, status: 'Pending Pickup' });
-    save(); render(); toast('Return recorded — balance reduced');
+    const lines = returnLines(d.party), picks = [...document.querySelectorAll('.rq')].map(x => ({ l: lines[+x.dataset.i], q: parseFloat(x.value) || 0 })).filter(x => x.q > 0);
+    if (!picks.length) return toast('Enter a return quantity for at least one item');
+    const bad = picks.find(x => x.q > x.l.rem); if (bad) return toast(`Cannot return ${bad.q} of ${bad.l.key} — only ${bad.l.rem} left to return`);
+    picks.forEach(({ l, q }) => db.returns.push({ id: 'RET-' + String(db.nextRet++).padStart(4, '0'), partyId: d.party, billId: l.b, date: today(), item: l.key, qty: q, amount: q * l.price, status: 'Pending Pickup', driver: '' }));
+    save(); render(); toast(`${picks.length} item(s) returned — balance reduced`);
   }
 });
 /* animated brand letters */
