@@ -1,0 +1,330 @@
+/* Thirumalakonda Plywoods – demo web app (data stored in browser; Supabase schema in /supabase) */
+const $ = (s, r = document) => r.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const inr = n => '₹' + Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+const today = () => new Date().toISOString().slice(0, 10);
+const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x.toISOString().slice(0, 10); };
+const fmtD = d => d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '';
+const SHOP = { name: 'Thirumalakonda Plywoods', owner: '9440026692' };
+const KEY = 'tkp_db_v1';
+
+/* ---------- data ---------- */
+let db = JSON.parse(localStorage.getItem(KEY) || 'null');
+const save = () => localStorage.setItem(KEY, JSON.stringify(db));
+function seed() {
+  const d = n => addDays(today(), -n);
+  db = { seq: {}, nextBill: 1, nextRet: 1, parties: [], bills: [], returns: [], employees: [
+    { id: 1, name: 'Ramesh', role: 'Driver', phone: '9000000001' }, { id: 2, name: 'Suresh', role: 'Salesman', phone: '9000000002' },
+    { id: 3, name: 'Mahesh', role: 'Carpenter', phone: '9000000003' }] };
+  const c1 = addParty({ type: 'customer', name: 'Thouhidh', phone: '9494409313', city: 'Dharmavaram', address: 'Main Road', tol: 5 });
+  const c2 = addParty({ type: 'customer', name: 'Ravi Kumar (sample)', phone: '9000011111', city: 'Anantapur', address: 'Subhash Road', tol: 7 });
+  const c3 = addParty({ type: 'customer', name: 'Lakshmi Furnitures (sample)', phone: '9000022222', city: 'Hindupur', address: 'Bus stand', tol: 5 });
+  const v1 = addParty({ type: 'vendor', name: 'Greenply Distributors (sample)', phone: '9000033333', city: 'Hyderabad', state: 'Telangana', address: 'Kukatpally', tol: 15 });
+  addBill(c1, d(20), [{ code: 'PLY-18', desc: 'Marine Plywood 18mm', qty: 10, price: 2100 }, { code: 'LAM-01', desc: 'Laminate Sheet 1mm', qty: 6, price: 1450 }], 15000, 'Delivered');
+  addBill(c1, d(1), [{ code: 'HNG-04', desc: 'Soft-close Hinges (pair)', qty: 20, price: 180 }], 0, 'Pending');
+  addBill(c2, d(10), [{ code: 'PLY-12', desc: 'BWP Plywood 12mm', qty: 15, price: 1500 }], 22500, 'Delivered');
+  addBill(c3, d(3), [{ code: 'PLY-18', desc: 'Marine Plywood 18mm', qty: 8, price: 2100 }, { code: 'ADH-01', desc: 'Fevicol Adhesive 5kg', qty: 4, price: 950 }], 5000, 'Pending');
+  addBill(v1, d(12), [{ code: 'PLY-18', desc: 'Marine Plywood 18mm', qty: 100, price: 1750 }], 100000, 'Delivered');
+  db.returns.push({ id: 'RET-0001', partyId: c1, billId: 'INV-0001', date: d(4), item: 'PLY-18 Marine Plywood 18mm', qty: 1, amount: 2100, status: 'Pending Pickup', driver: '' });
+  db.nextRet = 2; save();
+}
+function prefix(city, type) {
+  const t = RS_TOWNS[city]; let p = t ? t[0] : city.replace(/[^a-z]/gi, '').toUpperCase().slice(0, 3).padEnd(3, 'X');
+  return (type === 'vendor' ? 'V' : '') + p;
+}
+function addParty(o) {
+  const p = prefix(o.city || 'XXX', o.type); db.seq[p] = (db.seq[p] || 0) + 1;
+  const id = p + String(db.seq[p]).padStart(5, '0');
+  db.parties.push({ id, type: o.type, name: o.name || 'Unnamed', phone: o.phone || '', email: o.email || '', address: o.address || '',
+    city: o.city || '', state: o.state || 'Andhra Pradesh', tol: +o.tol || 5, created: today() });
+  return id;
+}
+function addBill(partyId, date, items, paid, delivery) {
+  const id = 'INV-' + String(db.nextBill++).padStart(4, '0');
+  const total = items.reduce((s, i) => s + i.qty * i.price, 0);
+  db.bills.push({ id, partyId, date, items, total, pays: paid > 0 ? [{ date, amt: +paid }] : [], delivery: delivery || 'Pending' });
+  return id;
+}
+if (!db) seed();
+
+/* ---------- ledger helpers ---------- */
+const P = id => db.parties.find(p => p.id === id);
+const paidOf = b => b.pays.reduce((s, x) => s + x.amt, 0);
+const dueOf = b => b.total - paidOf(b);
+const isOver = b => { const p = P(b.partyId); return dueOf(b) > 0 && today() > addDays(b.date, p ? p.tol : 5); };
+const overDays = b => Math.floor((new Date(today()) - new Date(addDays(b.date, P(b.partyId).tol))) / 864e5);
+function ledger(pid) {
+  const bills = db.bills.filter(b => b.partyId === pid), rets = db.returns.filter(r => r.partyId === pid);
+  const total = bills.reduce((s, b) => s + b.total, 0), paid = bills.reduce((s, b) => s + paidOf(b), 0);
+  const ret = rets.reduce((s, r) => s + r.amount, 0);
+  const overdue = bills.filter(isOver).reduce((s, b) => s + dueOf(b), 0);
+  return { bills, rets, total, paid, ret, balance: total - paid - ret, overdue, isOver: bills.some(isOver) && total - paid - ret > 0 };
+}
+const retDelayed = r => r.status === 'Pending Pickup' && today() > addDays(r.date, 2);
+
+/* ---------- UI plumbing ---------- */
+const NAV = [['dash', '📊 Dashboard'], ['customers', '👥 Customers'], ['bill', '🧾 New Bill'], ['bills', '📚 All Bills'], ['returns', '↩️ Returns'],
+  ['route', '🚚 Driver Route'], ['vendors', '🏭 Vendors'], ['staff', '🧑‍🔧 Employees'], ['reports', '📈 Reports']];
+let page = 'dash', sel = { customer: null, vendor: null }, filt = '';
+const go = p => { page = p; $('#side').classList.remove('open'); render(); };
+function toast(t) { const e = $('#toast'); e.textContent = t; e.classList.add('show'); setTimeout(() => e.classList.remove('show'), 2200); }
+function modal(html) { $('#mbody').innerHTML = html; $('#modal').classList.remove('hidden'); }
+const closeModal = () => $('#modal').classList.add('hidden');
+const tag = (t, c) => `<span class="tag t-${c}">${esc(t)}</span>`;
+const waLink = (phone, text) => `https://wa.me/91${String(phone).replace(/\D/g, '').slice(-10)}?text=${encodeURIComponent(text)}`;
+
+function render() {
+  $('#nav').innerHTML = NAV.map(([k, l]) => `<a class="${k === page ? 'on' : ''}" data-act="go" data-v="${k}">${l}</a>`).join('');
+  $('#title').textContent = (NAV.find(n => n[0] === page) || [])[1]?.replace(/^\S+\s/, '') || '';
+  $('#topact').innerHTML = `<span class="mut">${fmtD(today())}</span>`;
+  $('#view').innerHTML = ({ dash: vDash, customers: () => vParties('customer'), vendors: () => vParties('vendor'), bill: vBill, bills: vBills,
+    returns: vReturns, route: vRoute, staff: vStaff, reports: vReports })[page]();
+  if (page === 'bill') recalc();
+}
+
+/* ---------- Dashboard ---------- */
+function vDash() {
+  const cs = db.parties.filter(p => p.type === 'customer'), L = cs.map(c => ({ c, l: ledger(c.id) }));
+  const sum = k => L.reduce((s, x) => s + x.l[k], 0);
+  const od = L.filter(x => x.l.isOver), pendRet = db.returns.filter(r => r.status === 'Pending Pickup');
+  const pendDel = db.bills.filter(b => b.delivery === 'Pending' && P(b.partyId)?.type === 'customer');
+  const vl = db.parties.filter(p => p.type === 'vendor').map(v => ledger(v.id));
+  return `
+  <div class="grid g4">
+    <div class="card kpi"><small>Total Sales</small><b>${inr(sum('total'))}</b></div>
+    <div class="card kpi green"><small>Collected</small><b>${inr(sum('paid'))}</b></div>
+    <div class="card kpi red"><small>Overdue Amount</small><b>${inr(sum('overdue'))}</b><small>${od.length} customer(s)</small></div>
+    <div class="card kpi"><small>Net Balance (after returns)</small><b>${inr(sum('balance'))}</b></div>
+    <div class="card kpi"><small>Returns Pending Pickup</small><b>${pendRet.length}</b><small>${pendRet.filter(retDelayed).length} delayed</small></div>
+    <div class="card kpi"><small>Deliveries Pending</small><b>${pendDel.length}</b></div>
+    <div class="card kpi"><small>Payable to Vendors</small><b>${inr(vl.reduce((s, l) => s + l.balance, 0))}</b></div>
+    <div class="card kpi"><small>Employees</small><b>${db.employees.length}</b></div>
+  </div>
+  <div class="grid g2" style="margin-top:14px">
+    <div class="card"><h3>Customers — select to see full picture</h3>
+      <input placeholder="🔍 Search name / code / town" value="${esc(filt)}" data-input="filt">
+      <div class="plist" style="margin-top:8px">${partyList(cs, 'customer')}</div></div>
+    <div class="card" id="detail">${sel.customer ? partyDetail(sel.customer) : '<p class="mut">👈 Pick a customer to see paid, overdue, total business, returns and history.</p>'}</div>
+  </div>`;
+}
+function partyList(arr, type) {
+  const f = filt.toLowerCase();
+  return arr.filter(p => !f || (p.name + p.id + p.city).toLowerCase().includes(f)).map(p => {
+    const l = ledger(p.id);
+    return `<div class="pitem ${l.isOver ? 'od' : ''} ${sel[type] === p.id ? 'sel' : ''}" data-act="pick" data-t="${type}" data-v="${p.id}">
+      <div><b>${esc(p.name)}</b><br><small class="mut">${p.id} · ${esc(p.city)}</small></div>
+      <div class="r"><b class="${l.isOver ? 'red' : ''}">${inr(l.balance)}</b><br>${l.isOver ? tag('OVERDUE', 'red') : l.balance <= 0 ? tag('Clear', 'green') : ''}</div></div>`;
+  }).join('') || '<p class="mut">No records.</p>';
+}
+function partyDetail(id) {
+  const p = P(id), l = ledger(id), isC = p.type === 'customer';
+  return `<div class="row" style="align-items:center"><div><h3 style="margin:0">${esc(p.name)} ${l.isOver ? tag('OVERDUE', 'red') : ''}</h3>
+    <span class="mut">${p.id} · ${esc(p.address)} ${esc(p.city)}, ${esc(p.state)}<br>📞 ${esc(p.phone || '—')} ${p.email ? '· ✉ ' + esc(p.email) : ''} · Tolerance ${p.tol} days</span></div>
+    <div class="r"><button class="sm" data-act="statement" data-v="${id}">Statement / Link</button> <button class="sm ghost" data-act="editParty" data-v="${id}">Edit</button></div></div>
+  <div class="grid g4" style="margin:12px 0">
+    <div class="card kpi"><small>Total Business</small><b>${inr(l.total)}</b></div>
+    <div class="card kpi green"><small>Paid</small><b>${inr(l.paid)}</b></div>
+    <div class="card kpi ${l.overdue ? 'red' : ''}"><small>Overdue</small><b>${inr(l.overdue)}</b></div>
+    <div class="card kpi"><small>Returns credited</small><b>${inr(l.ret)}</b></div>
+  </div>
+  <p style="font-size:18px">Balance ${isC ? 'to receive' : 'to pay'}: <b class="${l.balance > 0 ? 'red' : 'green'}">${inr(l.balance)}</b></p>
+  <div class="scroll"><table><tr><th>Bill</th><th>Date</th><th class="r">Total</th><th class="r">Paid</th><th class="r">Due</th><th></th></tr>
+  ${l.bills.slice().reverse().map(b => `<tr class="${isOver(b) ? 'overdue' : ''}"><td>${b.id}</td><td>${fmtD(b.date)}</td><td class="r">${inr(b.total)}</td><td class="r">${inr(paidOf(b))}</td>
+    <td class="r">${inr(dueOf(b))}</td><td>${dueOf(b) > 0 ? `<button class="sm" data-act="pay" data-v="${b.id}">Pay</button> ` : tag('Paid', 'green')}<button class="sm ghost" data-act="invoice" data-v="${b.id}">View</button></td></tr>`).join('') || '<tr><td colspan=6 class="mut">No bills yet</td></tr>'}</table></div>
+  ${l.rets.length ? `<h3 style="margin-top:14px">Returns</h3>` + l.rets.map(r => `<div>${r.id} · ${esc(r.item)} ×${r.qty} · ${inr(r.amount)} ${tag(r.status, r.status === 'Pending Pickup' ? 'gold' : 'green')}</div>`).join('') : ''}`;
+}
+
+/* ---------- Customers / Vendors ---------- */
+function vParties(type) {
+  const arr = db.parties.filter(p => p.type === type), isC = type === 'customer';
+  return `<div class="grid g2"><div class="card"><h3>${isC ? 'Customers' : 'Vendors'} (${arr.length})</h3>
+    <button data-act="newParty" data-v="${type}">＋ New ${isC ? 'Customer' : 'Vendor'}</button>
+    <input style="margin-top:10px" placeholder="🔍 Search" value="${esc(filt)}" data-input="filt"><div class="plist" style="margin-top:8px">${partyList(arr, type)}</div></div>
+    <div class="card" id="detail">${sel[type] ? partyDetail(sel[type]) : '<p class="mut">Select from the list to see the dashboard.</p>'}</div></div>`;
+}
+function partyForm(type, p = {}) {
+  const isC = type === 'customer';
+  const loc = isC ? `<div class="f"><label>City / Town / Village (Rayalaseema — type or pick)</label><input name="city" list="towns" value="${esc(p.city || '')}" placeholder="e.g. Dharmavaram">
+      <datalist id="towns">${Object.entries(RS_TOWNS).map(([n, v]) => `<option value="${n}">${v[1]}</option>`).join('')}</datalist></div>
+    <div class="f"><label>State</label><input name="state" value="Andhra Pradesh" readonly></div>`
+    : `<div class="row"><div class="f"><label>State</label><select name="state">${OTHER_STATES.map(s => `<option ${s === (p.state || 'Telangana') ? 'selected' : ''}>${s}</option>`).join('')}</select></div>
+    <div class="f"><label>City / Town</label><input name="city" value="${esc(p.city || '')}" placeholder="Any city or town"></div></div>`;
+  return `<h3>${p.id ? 'Edit' : 'New'} ${isC ? 'Customer' : 'Vendor'} ${p.id ? '· ' + p.id : ''}</h3><form data-form="${p.id ? 'saveParty' : 'createParty'}" data-id="${p.id || ''}" data-type="${type}">
+    <p class="hint">All fields are optional. The ID is generated automatically from the town.</p>
+    <div class="f"><label>Name</label><input name="name" value="${esc(p.name || '')}"></div>
+    <div class="f"><label>Address description</label><input name="address" value="${esc(p.address || '')}"></div>${loc}
+    <div class="row"><div class="f"><label>Phone / WhatsApp</label><input name="phone" inputmode="numeric" value="${esc(p.phone || '')}"></div>
+    <div class="f"><label>Email</label><input name="email" type="email" value="${esc(p.email || '')}"></div>
+    <div class="f"><label>Overdue tolerance (days)</label><input name="tol" type="number" min="0" value="${p.tol ?? (isC ? 5 : 15)}"></div></div>
+    <button>Save</button></form>`;
+}
+
+/* ---------- Billing ---------- */
+function vBill() {
+  const cs = db.parties.slice().sort((a, b) => a.type.localeCompare(b.type));
+  const items = {}; db.bills.forEach(b => b.items.forEach(i => items[i.code] = i));
+  const html = `<div class="card" style="max-width:900px"><h3>Create Bill</h3><form data-form="createBill">
+   <div class="row"><div class="f"><label>Customer / Vendor</label><select name="party" required><option value="">— select —</option>
+     ${cs.map(p => `<option value="${p.id}" ${sel.customer === p.id ? 'selected' : ''}>${esc(p.name)} (${p.id})${p.type === 'vendor' ? ' – purchase' : ''}</option>`).join('')}</select></div>
+   <div class="f"><label>Bill date</label><input type="date" name="date" value="${today()}"></div></div>
+   <datalist id="codes">${Object.values(items).map(i => `<option value="${esc(i.code)}">${esc(i.desc)}</option>`).join('')}</datalist>
+   <table id="items"><tr><th>Item code</th><th>Description</th><th>Qty</th><th>Price</th><th class="r">Amount</th></tr></table>
+   <p><button type="button" class="ghost sm" data-act="addRow">＋ Add item</button></p>
+   <div class="row"><div class="f"><label>Paid now (₹) — leave 0 if credit</label><input type="number" name="paid" value="0" min="0"></div>
+   <div class="f"><label>Delivery</label><select name="delivery"><option>Pending</option><option>Delivered</option></select></div>
+   <div class="f"><label>Total</label><div style="font-size:26px" class="gd" id="grand">₹0</div></div></div>
+   <button>Save &amp; Generate Invoice</button></form></div>`;
+  window.__items = items; setTimeout(addRow, 0); return html;
+}
+function addRow() {
+  const t = $('#items'); if (!t) return; const r = t.insertRow();
+  r.innerHTML = `<td><input name="code" list="codes" data-input="fill"></td><td><input name="desc"></td><td><input name="qty" type="number" min="0" value="1" data-input="calc" style="width:80px"></td>
+    <td><input name="price" type="number" min="0" value="0" data-input="calc" style="width:110px"></td><td class="r amt">₹0</td>`;
+}
+function recalc() {
+  let g = 0; document.querySelectorAll('#items tr').forEach((r, i) => { if (!i) return; const a = (+r.querySelector('[name=qty]').value || 0) * (+r.querySelector('[name=price]').value || 0); r.querySelector('.amt').textContent = inr(a); g += a; });
+  const e = $('#grand'); if (e) e.textContent = inr(g);
+}
+function vBills() {
+  const bs = db.bills.slice().reverse();
+  return `<div class="card scroll"><table><tr><th>Bill</th><th>Date</th><th>Party</th><th class="r">Total</th><th class="r">Paid</th><th class="r">Due</th><th>Delivery</th><th></th></tr>
+  ${bs.map(b => { const p = P(b.partyId); return `<tr class="${isOver(b) ? 'overdue' : ''}"><td>${b.id}</td><td>${fmtD(b.date)}</td><td>${esc(p?.name)} ${p?.type === 'vendor' ? tag('Vendor', 'gold') : ''}</td>
+  <td class="r">${inr(b.total)}</td><td class="r">${inr(paidOf(b))}</td><td class="r">${inr(dueOf(b))}</td><td>${tag(b.delivery, b.delivery === 'Delivered' ? 'green' : 'gold')}</td>
+  <td>${dueOf(b) > 0 ? `<button class="sm" data-act="pay" data-v="${b.id}">Pay</button> ` : ''}<button class="sm ghost" data-act="invoice" data-v="${b.id}">View</button>
+  ${b.delivery === 'Pending' ? `<button class="sm ghost" data-act="deliver" data-v="${b.id}">Delivered ✓</button>` : ''}</td></tr>`; }).join('')}</table></div>`;
+}
+function invoiceHtml(b) {
+  const p = P(b.partyId);
+  return `<div class="inv"><div class="hd"><div><h2>${SHOP.name}</h2>Plywood &amp; Interior Materials · 📞 ${SHOP.owner}</div><div style="text-align:right"><b>${p.type === 'vendor' ? 'PURCHASE BILL' : 'INVOICE'}</b><br>${b.id}<br>${fmtD(b.date)}</div></div>
+  <p><b>${esc(p.name)}</b> (${p.id})<br>${esc(p.address)} ${esc(p.city)}, ${esc(p.state)} · ${esc(p.phone)}</p>
+  <table><tr><th>Code</th><th>Description</th><th class="r">Qty</th><th class="r">Price</th><th class="r">Amount</th></tr>
+  ${b.items.map(i => `<tr><td>${esc(i.code)}</td><td>${esc(i.desc)}</td><td class="r">${i.qty}</td><td class="r">${inr(i.price)}</td><td class="r">${inr(i.qty * i.price)}</td></tr>`).join('')}
+  <tr><td colspan=4 class="r"><b>Total</b></td><td class="r"><b>${inr(b.total)}</b></td></tr><tr><td colspan=4 class="r">Paid</td><td class="r">${inr(paidOf(b))}</td></tr>
+  <tr><td colspan=4 class="r"><b>Balance due</b></td><td class="r"><b>${inr(dueOf(b))}</b></td></tr></table>
+  <p style="font-size:12px;color:#555">Payment due within ${p.tol} days of bill date. Thank you for your business!</p></div>`;
+}
+function invoiceModal(id) {
+  const b = db.bills.find(x => x.id === id), p = P(b.partyId);
+  const msg = `Dear ${p.name}, thank you for shopping at ${SHOP.name}. Your bill ${b.id} dated ${fmtD(b.date)} for ${inr(b.total)} is ready. Paid: ${inr(paidOf(b))}, Balance: ${inr(dueOf(b))}.`;
+  modal(invoiceHtml(b) + `<p style="margin-top:12px"><button data-act="print">🖨 Print / PDF</button> <a class="btn" style="text-decoration:none;display:inline-block;background:#25d366" target="_blank" href="${waLink(p.phone, msg)}">Send on WhatsApp</a></p><div class="msg">${esc(msg)}</div><p class="hint">Auto-send via WhatsApp/SMS will be connected later; this opens WhatsApp with the message ready.</p>`);
+}
+function payModal(id) {
+  const b = db.bills.find(x => x.id === id);
+  modal(`<h3>Record payment · ${b.id}</h3><p>Due: <b class="red">${inr(dueOf(b))}</b></p><form data-form="pay" data-id="${id}"><div class="row"><div class="f"><label>Amount</label><input type="number" name="amt" value="${dueOf(b)}" max="${dueOf(b)}" min="1"></div>
+  <div class="f"><label>Date</label><input type="date" name="date" value="${today()}"></div></div><button>Mark Paid</button></form>`);
+}
+function statementModal(id) {
+  const p = P(id), l = ledger(id);
+  const od = l.bills.filter(isOver), link = `${location.href.split('#')[0]}#statement/${id}`;
+  const msg = od.length
+    ? `Dear ${p.name}, greetings from ${SHOP.name}. This is a gentle reminder that ${inr(l.overdue)} is overdue (outstanding balance ${inr(l.balance)}). Kindly arrange payment at your earliest convenience. View your complete purchase & payment history: ${link}\nThank you for your valued association.`
+    : `Dear ${p.name}, welcome to ${SHOP.name}! Your account balance is ${inr(l.balance)}. History: ${link}`;
+  modal(`<h2 class="gold" style="margin-top:0">${SHOP.name}</h2><h3>Account Statement — ${esc(p.name)} (${p.id})</h3>
+  <div class="grid g4"><div class="card kpi"><small>Purchases (+)</small><b>${inr(l.total)}</b></div><div class="card kpi green"><small>Paid (−)</small><b>${inr(l.paid)}</b></div>
+  <div class="card kpi"><small>Returns (−)</small><b>${inr(l.ret)}</b></div><div class="card kpi ${l.balance > 0 ? 'red' : 'green'}"><small>Balance</small><b>${inr(l.balance)}</b></div></div>
+  <div class="scroll"><table style="margin-top:12px"><tr><th>Date</th><th>Details</th><th class="r">+ Purchase</th><th class="r">− Paid/Return</th></tr>
+  ${[...l.bills.map(b => ({ d: b.date, t: 'Bill ' + b.id, a: b.total, c: 0 })), ...l.bills.flatMap(b => b.pays.map(x => ({ d: x.date, t: 'Payment for ' + b.id, a: 0, c: x.amt }))),
+    ...l.rets.map(r => ({ d: r.date, t: 'Return ' + r.id + ' – ' + r.item, a: 0, c: r.amount }))].sort((a, b) => a.d.localeCompare(b.d))
+    .map(e => `<tr><td>${fmtD(e.d)}</td><td>${esc(e.t)}</td><td class="r">${e.a ? inr(e.a) : ''}</td><td class="r green">${e.c ? inr(e.c) : ''}</td></tr>`).join('')}</table></div>
+  <h3 style="margin-top:14px">WhatsApp message (${od.length ? 'overdue reminder' : 'welcome'})</h3><div class="msg">${esc(msg)}</div>
+  <p><a class="btn" style="text-decoration:none;display:inline-block;background:#25d366" target="_blank" href="${waLink(p.phone, msg)}">Open in WhatsApp</a></p>`);
+}
+
+/* ---------- Returns ---------- */
+function vReturns() {
+  const cs = db.parties.filter(p => p.type === 'customer');
+  return `<div class="grid g2"><div class="card"><h3>Record material returned by customer</h3><form data-form="createReturn">
+   <div class="f"><label>Customer</label><select name="party" data-input="retParty" required><option value="">— select —</option>${cs.map(c => `<option value="${c.id}">${esc(c.name)} (${c.id})</option>`).join('')}</select></div>
+   <div class="f"><label>Item (from customer's bills)</label><select name="item" id="retItem"><option>select customer first</option></select></div>
+   <div class="row"><div class="f"><label>Qty</label><input type="number" name="qty" value="1" min="1"></div><div class="f"><label>Credit amount (₹)</label><input type="number" name="amount" id="retAmt" min="0"></div></div>
+   <button>Save return &amp; deduct from balance</button></form></div>
+   <div class="card scroll"><h3>Return register</h3><table><tr><th>ID</th><th>Customer</th><th>Item</th><th class="r">Credit</th><th>Status</th><th></th></tr>
+   ${db.returns.slice().reverse().map(r => `<tr class="${retDelayed(r) ? 'overdue' : ''}"><td>${r.id}<br><small class="mut">${fmtD(r.date)}</small></td><td>${esc(P(r.partyId)?.name)}<br><small class="mut">${esc(P(r.partyId)?.city)}</small></td>
+   <td>${esc(r.item)} ×${r.qty}</td><td class="r">${inr(r.amount)}</td><td>${tag(r.status, r.status === 'Pending Pickup' ? (retDelayed(r) ? 'red' : 'gold') : 'green')}${retDelayed(r) ? '<br>' + tag('DELAYED', 'red') : ''}</td>
+   <td>${r.status === 'Pending Pickup' ? `<button class="sm" data-act="picked" data-v="${r.id}">Picked ✓</button>` : ''}</td></tr>`).join('') || '<tr><td colspan=6 class="mut">No returns</td></tr>'}</table></div></div>`;
+}
+
+/* ---------- Driver route ---------- */
+function vRoute() {
+  const stops = {};
+  const add = (city, o) => (stops[city] = stops[city] || []).push(o);
+  db.bills.filter(b => b.delivery === 'Pending' && P(b.partyId)?.type === 'customer').forEach(b => add(P(b.partyId).city || 'Unknown', { k: 'Deliver', p: P(b.partyId), t: `Bill ${b.id} (${b.items.map(i => i.qty + '× ' + i.desc).join(', ')})` }));
+  db.returns.filter(r => r.status === 'Pending Pickup').forEach(r => add(P(r.partyId).city || 'Unknown', { k: 'Pick up return', p: P(r.partyId), t: `${r.item} ×${r.qty}`, late: retDelayed(r) }));
+  const cities = Object.keys(stops).sort();
+  let text = `🚚 ${SHOP.name} – Driver list ${fmtD(today())}\n` + cities.map(c => `\n📍 ${c}\n` + stops[c].map(s => ` • ${s.k}: ${s.p.name} ${s.p.phone} – ${s.t}`).join('\n')).join('');
+  return `<div class="card"><h3>Today's route — grouped by town so the driver covers each area in one trip</h3>
+  ${cities.map(c => `<div class="card" style="margin-bottom:10px"><b class="gd">📍 ${esc(c)}</b> <span class="mut">(${stops[c].length} stop${stops[c].length > 1 ? 's' : ''})</span>
+   ${stops[c].map(s => `<div style="padding:6px 0;border-bottom:1px solid #1c2c5c">${tag(s.k, s.k === 'Deliver' ? 'green' : 'gold')} <b>${esc(s.p.name)}</b> · ${esc(s.p.phone)} · ${esc(s.p.address)}<br><span class="mut">${esc(s.t)}</span> ${s.late ? tag('DELAYED', 'red') : ''}</div>`).join('')}</div>`).join('') || '<p class="mut">No pending deliveries or pickups 🎉</p>'}
+  <h3>Send to driver</h3><div class="msg">${esc(text)}</div><p><a class="btn" style="text-decoration:none;display:inline-block;background:#25d366" target="_blank" href="${waLink((db.employees.find(e => e.role === 'Driver') || {}).phone || '', text)}">Send to driver on WhatsApp</a></p></div>`;
+}
+
+/* ---------- Staff ---------- */
+function vStaff() {
+  return `<div class="grid g2"><div class="card"><h3>Add employee / worker</h3><form data-form="createStaff"><div class="f"><label>Name</label><input name="name" required></div>
+  <div class="row"><div class="f"><label>Role</label><select name="role"><option>Driver</option><option>Salesman</option><option>Carpenter</option><option>Helper</option><option>Accountant</option><option>Other</option></select></div>
+  <div class="f"><label>Phone</label><input name="phone"></div></div><button>Add</button></form></div>
+  <div class="card"><h3>Team (${db.employees.length})</h3><table>${db.employees.map(e => `<tr><td><b>${esc(e.name)}</b></td><td>${tag(e.role, 'gold')}</td><td>${esc(e.phone)}</td><td><button class="sm ghost" data-act="delStaff" data-v="${e.id}">✕</button></td></tr>`).join('')}</table></div></div>`;
+}
+
+/* ---------- Reports ---------- */
+function vReports() {
+  const cs = db.parties.filter(p => p.type === 'customer');
+  const rows = cs.map(c => ({ c, l: ledger(c.id) }));
+  const del = db.returns.filter(retDelayed);
+  return `<div class="grid">
+  <div class="card scroll"><h3>1. Purchase vs Paid report</h3><table><tr><th>Party</th><th class="r">Purchase</th><th class="r">Paid</th><th class="r">Returns</th><th class="r">Balance</th></tr>
+  ${db.parties.map(p => ({ p, l: ledger(p.id) })).map(({ p, l }) => `<tr><td>${esc(p.name)} ${p.type === 'vendor' ? tag('Vendor', 'gold') : ''}</td><td class="r">${inr(l.total)}</td><td class="r">${inr(l.paid)}</td><td class="r">${inr(l.ret)}</td><td class="r">${inr(l.balance)}</td></tr>`).join('')}</table></div>
+  <div class="card scroll"><h3>2. Customer-wise overdue amounts</h3><table><tr><th>Customer</th><th>Phone</th><th class="r">Overdue</th><th class="r">Max days late</th><th></th></tr>
+  ${rows.filter(x => x.l.overdue > 0).map(({ c, l }) => `<tr class="overdue"><td>${esc(c.name)}<br><small class="mut">${c.id}</small></td><td>${esc(c.phone)}</td><td class="r">${inr(l.overdue)}</td><td class="r">${Math.max(...l.bills.filter(isOver).map(overDays))}</td>
+  <td><button class="sm wa" data-act="statement" data-v="${c.id}">Remind</button></td></tr>`).join('') || '<tr><td colspan=5 class="mut">No overdue 🎉</td></tr>'}</table></div>
+  <div class="card scroll"><h3>3. Return material report</h3><table><tr><th>ID</th><th>Date</th><th>Customer</th><th>Item</th><th class="r">Credit</th><th>Status</th></tr>
+  ${db.returns.map(r => `<tr><td>${r.id}</td><td>${fmtD(r.date)}</td><td>${esc(P(r.partyId)?.name)}</td><td>${esc(r.item)} ×${r.qty}</td><td class="r">${inr(r.amount)}</td><td>${tag(r.status, r.status === 'Pending Pickup' ? 'gold' : 'green')}</td></tr>`).join('') || '<tr><td colspan=6 class="mut">None</td></tr>'}</table></div>
+  <div class="card scroll"><h3>4. Returns not picked / delayed by vehicle</h3><table><tr><th>ID</th><th>Customer</th><th>Town</th><th>Item</th><th>Waiting</th></tr>
+  ${del.map(r => `<tr class="overdue"><td>${r.id}</td><td>${esc(P(r.partyId)?.name)}</td><td>${esc(P(r.partyId)?.city)}</td><td>${esc(r.item)}</td><td>${Math.floor((new Date(today()) - new Date(r.date)) / 864e5)} days</td></tr>`).join('') || '<tr><td colspan=5 class="mut">Nothing delayed 🎉</td></tr>'}</table></div></div>`;
+}
+
+/* ---------- events ---------- */
+const ACT = {
+  go: v => go(v), closeModal, print: () => window.print(), addRow,
+  pick: (v, el) => { sel[el.dataset.t] = v; render(); },
+  newParty: v => modal(partyForm(v)), editParty: v => modal(partyForm(P(v).type, P(v))),
+  invoice: invoiceModal, pay: payModal, statement: statementModal,
+  deliver: v => { db.bills.find(b => b.id === v).delivery = 'Delivered'; save(); render(); toast('Marked delivered'); },
+  picked: v => { db.returns.find(r => r.id === v).status = 'Picked'; save(); render(); toast('Return picked up'); },
+  delStaff: v => { db.employees = db.employees.filter(e => e.id != v); save(); render(); }
+};
+document.addEventListener('click', e => { const el = e.target.closest('[data-act]'); if (el && ACT[el.dataset.act]) ACT[el.dataset.act](el.dataset.v, el); });
+$('#burger').onclick = () => $('#side').classList.toggle('open');
+document.addEventListener('input', e => {
+  const k = e.target.dataset.input; if (!k) return;
+  if (k === 'filt') { filt = e.target.value; const pos = e.target.selectionStart; render(); const i = $('[data-input=filt]'); i.focus(); i.setSelectionRange(pos, pos); }
+  if (k === 'calc') recalc();
+  if (k === 'fill') { const it = (window.__items || {})[e.target.value]; if (it) { const r = e.target.closest('tr'); r.querySelector('[name=desc]').value = it.desc; r.querySelector('[name=price]').value = it.price; recalc(); } }
+  if (k === 'retParty') {
+    const items = []; db.bills.filter(b => b.partyId === e.target.value).forEach(b => b.items.forEach(i => items.push({ b: b.id, ...i })));
+    $('#retItem').innerHTML = items.map((i, n) => `<option value="${esc(i.b)}|${esc(i.code + ' ' + i.desc)}|${i.price}">${i.b} · ${esc(i.desc)} @ ${inr(i.price)}</option>`).join('') || '<option>No bills</option>';
+    syncRetAmt();
+  }
+});
+const syncRetAmt = () => { const s = $('#retItem'); if (s && s.value.includes('|')) $('#retAmt').value = (+s.value.split('|')[2]) * (+document.querySelector('[name=qty]').value || 1); };
+document.addEventListener('change', e => { if (e.target.id === 'retItem') syncRetAmt(); if (e.target.name === 'qty' && $('#retItem')) syncRetAmt(); });
+document.addEventListener('submit', e => {
+  const f = e.target.dataset.form; if (!f) return; e.preventDefault();
+  const d = Object.fromEntries(new FormData(e.target)), id = e.target.dataset.id;
+  if (f === 'createParty') { const type = e.target.dataset.type; const nid = addParty({ ...d, type }); save(); closeModal(); sel[type] = nid; render(); toast('Created ' + nid); }
+  if (f === 'saveParty') { Object.assign(P(id), d, { tol: +d.tol }); save(); closeModal(); render(); toast('Saved'); }
+  if (f === 'createStaff') { db.employees.push({ id: Date.now(), ...d }); save(); render(); toast('Employee added'); }
+  if (f === 'pay') { db.bills.find(b => b.id === id).pays.push({ date: d.date, amt: +d.amt }); save(); closeModal(); render(); toast('Payment recorded'); }
+  if (f === 'createBill') {
+    const items = [...document.querySelectorAll('#items tr')].slice(1).map(r => ({ code: r.querySelector('[name=code]').value, desc: r.querySelector('[name=desc]').value, qty: +r.querySelector('[name=qty]').value, price: +r.querySelector('[name=price]').value })).filter(i => (i.code || i.desc) && i.qty > 0);
+    if (!items.length) return toast('Add at least one item');
+    const bid = addBill(d.party, d.date, items, +d.paid || 0, d.delivery); save(); sel.customer = d.party; go('bills'); invoiceModal(bid);
+  }
+  if (f === 'createReturn') {
+    const [bill, item] = (d.item || '').split('|'); if (!bill || !item) return toast('Pick customer & item');
+    db.returns.push({ id: 'RET-' + String(db.nextRet++).padStart(4, '0'), partyId: d.party, billId: bill, date: today(), item, qty: +d.qty, amount: +d.amount, status: 'Pending Pickup' });
+    save(); render(); toast('Return recorded — balance reduced');
+  }
+});
+if (location.hash.startsWith('#statement/') && P(location.hash.split('/')[1])) setTimeout(() => statementModal(location.hash.split('/')[1]), 50);
+render();
