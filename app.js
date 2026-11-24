@@ -61,10 +61,7 @@ function seed() {
   db.employees.push({ id: 1, name: 'Ramesh', role: 'Driver', phone: '' });
   addParty({ type: 'customer', name: 'Thouhidh', phone: '9494409313', city: 'Dharmavaram', address: 'Main Road', tol: 5 });
 }
-function prefix(city, type) {
-  const t = RS_TOWNS[city]; let p = t ? t[0] : city.replace(/[^a-z]/gi, '').toUpperCase().slice(0, 3).padEnd(3, 'X');
-  return (type === 'vendor' ? 'V' : '') + p;
-}
+function prefix(city, type) { return (type === 'vendor' ? 'V' : '') + townCode(city || 'XXX'); }
 function addParty(o) {
   const p = prefix(o.city || 'XXX', o.type); db.seq[p] = (db.seq[p] || 0) + 1;
   const id = p + String(db.seq[p]).padStart(5, '0');
@@ -176,11 +173,11 @@ function vParties(type) {
 }
 function partyForm(type, p = {}) {
   const isC = type === 'customer';
-  const loc = isC ? `<div class="f"><label>City / Town / Village (Rayalaseema — type or pick)</label><input name="city" list="towns" value="${esc(p.city || '')}" placeholder="e.g. Dharmavaram">
-      <datalist id="towns">${Object.entries(RS_TOWNS).map(([n, v]) => `<option value="${n}">${v[1]}</option>`).join('')}</datalist></div>
+  const loc = isC ? `<div class="f placebox"><label>City / Town / Village — Andhra Pradesh (type to search; if not listed, just type it)</label>
+      <input name="city" autocomplete="off" data-input="place" data-kind="customer" value="${esc(p.city || '')}" placeholder="e.g. Dharmavaram"><div class="sug-box" id="sug"></div></div>
     <div class="f"><label>State</label><input name="state" value="Andhra Pradesh" readonly></div>`
     : `<div class="row"><div class="f"><label>State</label><select name="state">${OTHER_STATES.map(s => `<option ${s === (p.state || 'Telangana') ? 'selected' : ''}>${s}</option>`).join('')}</select></div>
-    <div class="f"><label>City / Town</label><input name="city" value="${esc(p.city || '')}" placeholder="Any city or town"></div></div>`;
+    <div class="f placebox"><label>City / Town (type to search or enter any)</label><input name="city" autocomplete="off" data-input="place" data-kind="vendor" value="${esc(p.city || '')}" placeholder="Any city or town"><div class="sug-box" id="sug"></div></div></div>`;
   return `<h3>${p.id ? 'Edit' : 'New'} ${isC ? 'Customer' : 'Vendor'} ${p.id ? '· ' + p.id : ''}</h3><form data-form="${p.id ? 'saveParty' : 'createParty'}" data-id="${p.id || ''}" data-type="${type}">
     <p class="hint">All fields are optional. The ID is generated automatically from the town.</p>
     <div class="f"><label>Name</label><input name="name" value="${esc(p.name || '')}"></div>
@@ -315,21 +312,38 @@ function vReports() {
   ${del.map(r => `<tr class="overdue"><td>${r.id}</td><td>${esc(P(r.partyId)?.name)}</td><td>${esc(P(r.partyId)?.city)}</td><td>${esc(r.item)}</td><td>${Math.floor((new Date(today()) - new Date(r.date)) / 864e5)} days</td></tr>`).join('') || '<tr><td colspan=5 class="mut">Nothing delayed 🎉</td></tr>'}</table></div></div>`;
 }
 
+/* ---------- place suggestions ---------- */
+function showSug(inp) {
+  const box = $('#sug'); if (!box) return;
+  const q = inp.value.trim().toLowerCase(), vendor = inp.dataset.kind === 'vendor';
+  if (!q) { box.innerHTML = ''; return; }
+  const pool = (vendor ? VENDOR_PLACES : AP_PLACES).slice();
+  const known = new Set(pool.map(x => x[0].toLowerCase()));
+  db.parties.forEach(p => { if (p.city && !known.has(p.city.toLowerCase()) && (vendor === (p.type === 'vendor'))) { known.add(p.city.toLowerCase()); pool.push([p.city, 'added earlier']); } });
+  const starts = pool.filter(x => x[0].toLowerCase().startsWith(q)), has = pool.filter(x => !x[0].toLowerCase().startsWith(q) && x[0].toLowerCase().includes(q));
+  const list = [...starts, ...has].slice(0, 40);
+  box.innerHTML = list.map(x => `<div class="sug" data-act="pickPlace" data-v="${esc(x[0])}" data-s="${esc(x[1])}">${esc(x[0])} <small>${esc(x[1])}</small></div>`).join('') +
+    (known.has(q) ? '' : `<div class="sug new" data-act="pickPlace" data-v="${esc(inp.value.trim())}" data-s="">➕ Use "${esc(inp.value.trim())}" (not in list)</div>`);
+}
+
 /* ---------- events ---------- */
 const ACT = {
   go: v => go(v), closeModal, print: () => window.print(), addRow,
   pick: (v, el) => { sel[el.dataset.t] = v; render(); },
+  pickPlace: (v, el) => { const f = el.closest('form'); f.querySelector('[name=city]').value = v; const st = el.dataset.s, sel = f.querySelector('select[name=state]'); if (sel && st && [...sel.options].some(o => o.value === st)) sel.value = st; $('#sug').innerHTML = ''; },
   newParty: v => modal(partyForm(v)), editParty: v => modal(partyForm(P(v).type, P(v))),
   invoice: invoiceModal, pay: payModal, statement: statementModal,
   deliver: v => { db.bills.find(b => b.id === v).delivery = 'Delivered'; save(); render(); toast('Marked delivered'); },
   picked: v => { db.returns.find(r => r.id === v).status = 'Picked'; save(); render(); toast('Return picked up'); },
   delStaff: v => { db.employees = db.employees.filter(e => e.id != v); save(); render(); }
 };
-document.addEventListener('click', e => { const el = e.target.closest('[data-act]'); if (el && ACT[el.dataset.act]) ACT[el.dataset.act](el.dataset.v, el); });
+document.addEventListener('focusin', e => { if (e.target.dataset?.input === 'place') showSug(e.target); });
+document.addEventListener('click', e => { if (!e.target.closest('.placebox')) { const sb = $('#sug'); if (sb) sb.innerHTML = ''; } const el = e.target.closest('[data-act]'); if (el && ACT[el.dataset.act]) ACT[el.dataset.act](el.dataset.v, el); });
 $('#burger').onclick = () => $('#side').classList.toggle('open');
 document.addEventListener('input', e => {
   const k = e.target.dataset.input; if (!k) return;
   if (k === 'filt') { filt = e.target.value; const pos = e.target.selectionStart; render(); const i = $('[data-input=filt]'); i.focus(); i.setSelectionRange(pos, pos); }
+  if (k === 'place') showSug(e.target);
   if (k === 'calc') recalc();
   if (k === 'fill') { const it = (window.__items || {})[e.target.value]; if (it) { const r = e.target.closest('tr'); r.querySelector('[name=desc]').value = it.desc; r.querySelector('[name=price]').value = it.price; recalc(); } }
   if (k === 'retParty') {
@@ -358,6 +372,9 @@ document.addEventListener('submit', e => {
     save(); render(); toast('Return recorded — balance reduced');
   }
 });
+/* animated brand letters */
+document.querySelectorAll('[data-bn]').forEach(el => { el.innerHTML = [...el.dataset.bn].map((ch, i) => `<span style="--i:${i}">${ch}</span>`).join(''); });
+
 /* ---------- login / startup ---------- */
 async function start() {
   $('#login').classList.add('hidden'); $('#app').classList.remove('hidden');

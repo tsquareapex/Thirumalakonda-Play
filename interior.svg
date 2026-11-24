@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="780" viewBox="0 0 1000 780" fill="none" stroke="#c9a227" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+<!-- sofa -->
+<g transform="translate(40,60)"><rect x="12" y="0" width="196" height="52" rx="16"/><rect x="0" y="34" width="34" height="76" rx="12"/><rect x="186" y="34" width="34" height="76" rx="12"/><rect x="30" y="52" width="160" height="50" rx="10"/><line x1="110" y1="52" x2="110" y2="102"/><line x1="18" y1="110" x2="18" y2="128"/><line x1="202" y1="110" x2="202" y2="128"/></g>
+<!-- wardrobe -->
+<g transform="translate(390,30)"><rect width="140" height="210" rx="4"/><line x1="70" y1="0" x2="70" y2="210"/><rect x="10" y="12" width="50" height="88" rx="3"/><rect x="80" y="12" width="50" height="88" rx="3"/><rect x="10" y="112" width="50" height="88" rx="3"/><rect x="80" y="112" width="50" height="88" rx="3"/><circle cx="60" cy="105" r="3.5"/><circle cx="80" cy="105" r="3.5"/><line x1="10" y1="210" x2="10" y2="224"/><line x1="130" y1="210" x2="130" y2="224"/></g>
+<!-- bed -->
+<g transform="translate(650,70)"><rect x="0" y="0" width="210" height="96" rx="10"/><rect x="0" y="76" width="210" height="58" rx="8"/><rect x="16" y="52" width="76" height="30" rx="12"/><rect x="118" y="52" width="76" height="30" rx="12"/><line x1="8" y1="134" x2="8" y2="156"/><line x1="202" y1="134" x2="202" y2="156"/><path d="M0 104 H210"/></g>
+<!-- door -->
+<g transform="translate(900,30)"><rect width="84" height="210" rx="3"/><rect x="11" y="14" width="62" height="74" rx="3"/><rect x="11" y="102" width="62" height="92" rx="3"/><circle cx="70" cy="110" r="5"/></g>
+<!-- dining table + chairs -->
+<g transform="translate(40,340)"><rect x="20" y="30" width="190" height="12" rx="5"/><line x1="40" y1="42" x2="40" y2="110"/><line x1="190" y1="42" x2="190" y2="110"/><path d="M0 12 h26 v40 M0 12 v100 M0 70 h26"/><path d="M234 12 h-26 v40 M234 12 v100 M234 70 h-26"/></g>
+<!-- floor lamp -->
+<g transform="translate(340,340)"><path d="M22 0 H62 L78 52 H6 Z"/><line x1="42" y1="52" x2="42" y2="170"/><ellipse cx="42" cy="176" rx="30" ry="7"/></g>
+<!-- plywood stack -->
+<g transform="translate(470,400)"><path d="M0 40 h150 l30 -22 h-150 z"/><path d="M0 40 v10 h150 v-10"/><path d="M150 50 l30 -22 v-10"/><path d="M0 66 h150 l30 -22 h-150 z"/><path d="M0 66 v10 h150 v-10"/><path d="M150 76 l30 -22 v-10"/><path d="M0 92 h150 l30 -22 h-150 z"/><path d="M0 92 v10 h150 v-10"/><path d="M150 102 l30 -22 v-10"/><path d="M20 30 q30 -6 70 0 M50 24 q20 -4 60 0" stroke-width="1.6"/></g>
+<!-- kitchen cabinets -->
+<g transform="translate(740,380)"><rect width="250" height="76" rx="4"/><line x1="83" y1="0" x2="83" y2="76"/><line x1="166" y1="0" x2="166" y2="76"/><circle cx="76" cy="66" r="3"/><circle cx="90" cy="66" r="3"/><circle cx="159" cy="66" r="3"/><circle cx="173" cy="66" r="3"/><rect y="126" width="250" height="104" rx="4"/><line x1="125" y1="126" x2="125" y2="230"/><line y1="156" x2="250" y2="156"/><line x1="40" y1="141" x2="85" y2="141"/><line x1="165" y1="141" x2="210" y2="141"/><line x1="-6" y1="126" x2="256" y2="126"/></g>
+<!-- wall shelf + books + plant -->
+<g transform="translate(40,610)"><line x1="0" y1="64" x2="220" y2="64"/><rect x="10" y="22" width="14" height="42"/><rect x="28" y="12" width="14" height="52"/><rect x="46" y="26" width="14" height="38"/><path d="M100 64 v-16 h40 v16 M120 48 q-18 -22 -4 -40 M120 48 q16 -20 10 -36"/><line x1="170" y1="64" x2="170" y2="40"/><circle cx="170" cy="32" r="8"/></g>
+<!-- window with curtains -->
+<g transform="translate(330,600)"><rect x="20" y="0" width="120" height="140" rx="3"/><line x1="80" y1="0" x2="80" y2="140"/><line x1="20" y1="70" x2="140" y2="70"/><path d="M0 -4 q22 60 4 150 M160 -4 q-22 60 -4 150 M-6 -4 H166"/></g>
+<!-- armchair -->
+<g transform="translate(560,610)"><rect x="14" y="0" width="100" height="70" rx="18"/><rect x="0" y="48" width="26" height="60" rx="10"/><rect x="102" y="48" width="26" height="60" rx="10"/><rect x="24" y="70" width="80" height="34" rx="8"/><line x1="14" y1="108" x2="14" y2="126"/><line x1="114" y1="108" x2="114" y2="126"/></g>
+<!-- pendant lamp + wall frame -->
+<g transform="translate(790,560)"><line x1="40" y1="0" x2="40" y2="60"/><path d="M10 100 q30 -62 60 0 Z"/><path d="M30 106 h20"/><rect x="120" y="30" width="90" height="70" rx="3"/><rect x="130" y="40" width="70" height="50" rx="2"/><path d="M134 84 l22 -26 18 18 10 -10 14 18"/></g>
+<!-- sparkles -->
+<g stroke-width="2"><path d="M300 30 v22 M289 41 h22"/><path d="M600 300 v18 M591 309 h18"/><path d="M900 520 v22 M889 531 h22"/><path d="M280 560 v16 M272 568 h16"/><path d="M20 520 v18 M11 529 h18"/><path d="M700 280 v14 M693 287 h14"/></g>
+</svg>
