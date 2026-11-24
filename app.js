@@ -252,6 +252,101 @@ function vBills() {
   <td>${dueOf(b) > 0 ? `<button class="sm" data-act="pay" data-v="${b.id}">Pay</button> ` : ''}<button class="sm ghost" data-act="invoice" data-v="${b.id}">View</button>
   ${b.delivery === 'Pending' ? `<button class="sm ghost" data-act="deliver" data-v="${b.id}">${sup ? 'Received ✓' : 'Delivered ✓'}</button>` : ''}</td></tr>`; }).join('') || '<tr><td colspan=8 class="mut">No bills</td></tr>'}</table></div>`;
 }
+/* ---------- Documents: print layout, PDF, WhatsApp share ---------- */
+const rs = n => 'Rs. ' + Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+function inWords(n) {
+  n = Math.round(n); if (!n) return 'Zero';
+  const a = ['', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine', 'Ten', 'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen', 'Seventeen', 'Eighteen', 'Nineteen'];
+  const b = ['', '', 'Twenty', 'Thirty', 'Forty', 'Fifty', 'Sixty', 'Seventy', 'Eighty', 'Ninety'];
+  const two = x => x < 20 ? a[x] : b[Math.floor(x / 10)] + (x % 10 ? ' ' + a[x % 10] : '');
+  const three = x => (x > 99 ? a[Math.floor(x / 100)] + ' Hundred' + (x % 100 ? ' ' : '') : '') + (x % 100 ? two(x % 100) : '');
+  let out = ''; const cr = Math.floor(n / 1e7); n %= 1e7; const lk = Math.floor(n / 1e5); n %= 1e5; const th = Math.floor(n / 1e3); n %= 1e3;
+  if (cr) out += three(cr) + ' Crore '; if (lk) out += two(lk) + ' Lakh '; if (th) out += two(th) + ' Thousand '; if (n) out += three(n);
+  return out.trim();
+}
+function printDoc(html) { $('#printarea').innerHTML = html; setTimeout(() => window.print(), 50); }
+const docHead = (title, right = '') => `<div class="pd-hd"><div><div class="pd-shop">${SHOP.name}</div><div>Plywood &amp; Interior Materials</div><div>Ph: ${SHOP.owner}</div></div><div class="pd-r"><b class="pd-title">${title}</b>${right}</div></div>`;
+const partyBlock = p => `<div class="pd-party"><b>${esc(p.name)}</b> (${p.id})<br>${esc(p.address)} ${esc(p.city)}, ${esc(p.state)}<br>Phone: ${esc(p.phone || '-')}</div>`;
+
+function invoiceDoc(b) {
+  const p = P(b.partyId), sup = p.type === 'vendor';
+  return `<div class="pdoc">${docHead(sup ? 'PURCHASE BILL' : 'TAX INVOICE', `<div>Bill No: <b>${b.id}</b></div><div>Date: ${fmtD(b.date)}</div>`)}
+  ${partyBlock(p)}
+  <table class="pd-t"><thead><tr><th>#</th><th>Item code</th><th>Description</th><th class="r">Qty</th><th class="r">Rate</th><th class="r">Amount</th></tr></thead><tbody>
+  ${b.items.map((i, n) => `<tr><td>${n + 1}</td><td>${esc(i.code)}</td><td>${esc(i.desc)}</td><td class="r">${i.qty}</td><td class="r">${inr(i.price)}</td><td class="r">${inr(i.qty * i.price)}</td></tr>`).join('')}
+  </tbody><tfoot><tr><td colspan="5" class="r">Total</td><td class="r">${inr(b.total)}</td></tr><tr><td colspan="5" class="r">Paid</td><td class="r">${inr(paidOf(b))}</td></tr>
+  <tr class="pd-big"><td colspan="5" class="r">Balance due</td><td class="r">${inr(dueOf(b))}</td></tr></tfoot></table>
+  <p><b>Amount in words:</b> ${inWords(b.total)} Rupees Only</p>
+  <p class="pd-note">Payment due within ${p.tol} days of bill date. Goods once sold will be taken back only as per return policy. Thank you for your business!</p>
+  <div class="pd-sign"><div>Customer signature</div><div>For ${SHOP.name}</div></div></div>`;
+}
+function statementData(id) {
+  const p = P(id), l = ledger(id);
+  const ev = [...l.bills.map(b => ({ d: b.date, o: 0, t: 'Bill ' + b.id, a: b.total, c: 0 })), ...l.bills.flatMap(b => b.pays.map(x => ({ d: x.date, o: 1, t: 'Payment for ' + b.id, a: 0, c: x.amt }))),
+    ...l.rets.map(r => ({ d: r.date, o: 2, t: 'Return ' + r.id + ' - ' + r.item, a: 0, c: r.amount }))].sort((x, y) => x.d.localeCompare(y.d) || x.o - y.o);
+  let bal = 0; const rows = ev.map(e => { bal += e.a - e.c; return [fmtD(e.d), e.t, e.a || '', e.c || '', bal]; });
+  return { p, l, rows, head: ['Date', 'Details', p.type === 'vendor' ? 'Purchase' : 'Sale (+)', 'Paid / Return (-)', 'Balance'] };
+}
+function statementDoc(id) {
+  const { p, l, rows, head } = statementData(id), m = v => v === '' ? '' : inr(v);
+  return `<div class="pdoc">${docHead('ACCOUNT STATEMENT', `<div>As on: ${fmtD(today())}</div>`)}${partyBlock(p)}
+  <table class="pd-t pd-sum"><tr><th>${p.type === 'vendor' ? 'Total purchases' : 'Total sales'}</th><th>Paid</th><th>Returns</th><th>Balance ${p.type === 'vendor' ? 'payable' : 'due'}</th></tr>
+  <tr><td>${inr(l.total)}</td><td>${inr(l.paid)}</td><td>${inr(l.ret)}</td><td><b>${inr(l.balance)}</b></td></tr></table>
+  <table class="pd-t"><thead><tr>${head.map((h, i) => `<th class="${i > 1 ? 'r' : ''}">${h}</th>`).join('')}</tr></thead><tbody>
+  ${rows.map(r => `<tr><td>${r[0]}</td><td>${esc(r[1])}</td><td class="r">${m(r[2])}</td><td class="r">${m(r[3])}</td><td class="r">${inr(r[4])}</td></tr>`).join('') || '<tr><td colspan="5">No transactions</td></tr>'}</tbody></table>
+  ${l.overdue > 0 ? `<p class="pd-note"><b>Overdue amount: ${inr(l.overdue)}</b> - kindly arrange payment at the earliest.</p>` : ''}<p class="pd-note">This is a computer generated statement.</p></div>`;
+}
+function reportDoc(r) {
+  const cell = (v, t) => t === 'm' ? inr(v) : esc(v ?? '');
+  return `<div class="pdoc">${docHead(r.title.toUpperCase(), `<div>Generated: ${fmtD(today())}</div>`)}<p class="pd-note">${esc(r.sub)}</p>
+  <table class="pd-t"><thead><tr>${r.head.map((h, i) => `<th class="${r.types[i] !== 't' ? 'r' : ''}">${h}</th>`).join('')}</tr></thead><tbody>
+  ${r.rows.map(row => `<tr>${row.map((v, i) => `<td class="${r.types[i] !== 't' ? 'r' : ''}">${cell(v, r.types[i])}</td>`).join('')}</tr>`).join('') || `<tr><td colspan="${r.head.length}">No records for the selected filters</td></tr>`}</tbody>
+  ${r.foot ? `<tfoot><tr>${r.foot.map((v, i) => `<td class="${r.types[i] !== 't' ? 'r' : ''}">${v === '' ? '' : cell(v, r.types[i])}</td>`).join('')}</tr></tfoot>` : ''}</table></div>`;
+}
+
+/* PDF files (jsPDF) */
+function pdfBase(title, lines) {
+  const doc = new window.jspdf.jsPDF({ unit: 'pt', format: 'a4' });
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(18); doc.setTextColor(138, 106, 12); doc.text(SHOP.name, 40, 46);
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.setTextColor(90); doc.text('Plywood & Interior Materials  |  Ph: ' + SHOP.owner, 40, 60);
+  doc.setDrawColor(201, 162, 39); doc.setLineWidth(2); doc.line(40, 68, 555, 68);
+  doc.setTextColor(0); doc.setFont('helvetica', 'bold'); doc.setFontSize(14); doc.text(title, 40, 92);
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(10); let y = 108; lines.forEach(t => { doc.text(t, 40, y); y += 14; });
+  return { doc, y };
+}
+function pdfTable(doc, y, head, rows, foot, rightCols) {
+  doc.autoTable({ startY: y + 4, head: [head], body: rows, foot: foot ? [foot] : undefined, theme: 'grid', styles: { fontSize: 9, cellPadding: 4, lineColor: [200, 180, 120] },
+    headStyles: { fillColor: [201, 162, 39], textColor: [40, 30, 0] }, footStyles: { fillColor: [250, 240, 200], textColor: 0, fontStyle: 'bold' },
+    columnStyles: Object.fromEntries(rightCols.map(i => [i, { halign: 'right' }])), margin: { left: 40, right: 40 } });
+  return doc.lastAutoTable.finalY;
+}
+function invoicePdf(b) {
+  const p = P(b.partyId), { doc, y } = pdfBase(p.type === 'vendor' ? 'PURCHASE BILL' : 'TAX INVOICE', [`Bill No: ${b.id}     Date: ${fmtD(b.date)}`, `${p.name} (${p.id})`, `${p.address} ${p.city}, ${p.state}   Phone: ${p.phone || '-'}`]);
+  let e = pdfTable(doc, y, ['#', 'Code', 'Description', 'Qty', 'Rate', 'Amount'], b.items.map((i, n) => [n + 1, i.code, i.desc, i.qty, rs(i.price), rs(i.qty * i.price)]),
+    ['', '', '', '', 'Total', rs(b.total)], [3, 4, 5]);
+  doc.setFontSize(10); doc.text(`Paid: ${rs(paidOf(b))}     Balance due: ${rs(dueOf(b))}`, 40, e + 22); doc.text('Amount in words: ' + inWords(b.total) + ' Rupees Only', 40, e + 38);
+  doc.setFontSize(8); doc.setTextColor(100); doc.text(`Payment due within ${p.tol} days of bill date. Thank you for your business!`, 40, e + 58);
+  return doc;
+}
+function statementPdf(id) {
+  const { p, l, rows, head } = statementData(id), { doc, y } = pdfBase('ACCOUNT STATEMENT', [`${p.name} (${p.id})`, `${p.address} ${p.city}, ${p.state}   Phone: ${p.phone || '-'}`, `As on ${fmtD(today())}`]);
+  const e = pdfTable(doc, y, ['Total ' + (p.type === 'vendor' ? 'purchases' : 'sales'), 'Paid', 'Returns', 'Balance ' + (p.type === 'vendor' ? 'payable' : 'due')], [[rs(l.total), rs(l.paid), rs(l.ret), rs(l.balance)]], null, [0, 1, 2, 3]);
+  const e2 = pdfTable(doc, e + 8, head, rows.map(r => [r[0], r[1], r[2] === '' ? '' : rs(r[2]), r[3] === '' ? '' : rs(r[3]), rs(r[4])]), null, [2, 3, 4]);
+  if (l.overdue > 0) { doc.setTextColor(200, 30, 40); doc.setFontSize(10); doc.text(`Overdue amount: ${rs(l.overdue)} - kindly arrange payment at the earliest.`, 40, e2 + 22); }
+  return doc;
+}
+function reportPdf(r) {
+  const { doc, y } = pdfBase(r.title, [r.sub, 'Generated ' + fmtD(today())]);
+  const m = (v, t) => t === 'm' ? rs(v) : (v ?? '');
+  pdfTable(doc, y, r.head, r.rows.map(row => row.map((v, i) => m(v, r.types[i]))), r.foot ? r.foot.map((v, i) => v === '' ? '' : m(v, r.types[i])) : null, r.types.map((t, i) => t !== 't' ? i : -1).filter(i => i >= 0));
+  return doc;
+}
+async function sharePdf(doc, name, text, phone) {
+  const file = new File([doc.output('blob')], name, { type: 'application/pdf' });
+  if (navigator.canShare && navigator.canShare({ files: [file] })) { try { await navigator.share({ files: [file], text }); return; } catch (e) { if (e.name === 'AbortError') return; } }
+  doc.save(name); window.open(waLink(phone, text), '_blank'); toast('PDF downloaded - attach it in the WhatsApp chat that opened');
+}
+
 function invoiceHtml(b) {
   const p = P(b.partyId);
   return `<div class="inv"><div class="hd"><div><h2>${SHOP.name}</h2>Plywood &amp; Interior Materials · 📞 ${SHOP.owner}</div><div style="text-align:right"><b>${p.type === 'vendor' ? 'PURCHASE BILL' : 'INVOICE'}</b><br>${b.id}<br>${fmtD(b.date)}</div></div>
@@ -266,7 +361,9 @@ function invoiceModal(id) {
   const b = db.bills.find(x => x.id === id), p = P(b.partyId);
   const msg = p.type === 'vendor' ? `Dear ${p.name}, ${SHOP.name} has recorded purchase bill ${b.id} dated ${fmtD(b.date)} for ${inr(b.total)}. Paid: ${inr(paidOf(b))}, Balance payable: ${inr(dueOf(b))}.`
     : `Dear ${p.name}, thank you for shopping at ${SHOP.name}. Your bill ${b.id} dated ${fmtD(b.date)} for ${inr(b.total)} is ready. Paid: ${inr(paidOf(b))}, Balance: ${inr(dueOf(b))}.`;
-  modal(invoiceHtml(b) + `<p style="margin-top:12px"><button data-act="print">🖨 Print / PDF</button> <a class="btn" style="text-decoration:none;display:inline-block;background:#25d366" target="_blank" href="${waLink(p.phone, msg)}">Send on WhatsApp</a></p><div class="msg">${esc(msg)}</div><p class="hint">Auto-send via WhatsApp/SMS will be connected later; this opens WhatsApp with the message ready.</p>`);
+  modal(invoiceHtml(b) + `<p style="margin-top:12px"><button data-act="printInv" data-v="${id}">🖨 Print</button> <button class="ghost" data-act="pdfInv" data-v="${id}">⬇ Download PDF</button>
+   <button class="wa" data-act="shareInv" data-v="${id}">WhatsApp (PDF)</button></p><div class="msg">${esc(msg)}</div>
+   <p class="hint">On a phone, "WhatsApp (PDF)" shares the PDF file directly. On a computer the PDF downloads and WhatsApp opens - attach the file in the chat. Fully automatic sending will come with the WhatsApp Business connection.</p>`);
 }
 function payModal(id) {
   const b = db.bills.find(x => x.id === id);
@@ -274,23 +371,21 @@ function payModal(id) {
   <div class="f"><label>Date</label><input type="date" name="date" value="${today()}"></div></div><button>Mark Paid</button></form>`);
 }
 function statementModal(id) {
-  const p = P(id), l = ledger(id);
-  const od = l.bills.filter(isOver), link = `${location.href.split('#')[0]}#statement/${id}`;
-  const msg = p.type === 'vendor' ? `Dear ${p.name}, this is ${SHOP.name}. Our records show ${inr(l.balance)} payable to you. We will arrange payment as per terms. Statement: ${link}`
-    : od.length
-    ? `Dear ${p.name}, greetings from ${SHOP.name}. This is a gentle reminder that ${inr(l.overdue)} is overdue (outstanding balance ${inr(l.balance)}). Kindly arrange payment at your earliest convenience. View your complete purchase & payment history: ${link}\nThank you for your valued association.`
-    : `Dear ${p.name}, welcome to ${SHOP.name}! Your account balance is ${inr(l.balance)}. History: ${link}`;
-  modal(`<h2 class="gold" style="margin-top:0">${SHOP.name}</h2><h3>Account Statement — ${esc(p.name)} (${p.id})</h3>
-  <div class="grid g4"><div class="card kpi"><small>Purchases (+)</small><b>${inr(l.total)}</b></div><div class="card kpi green"><small>Paid (−)</small><b>${inr(l.paid)}</b></div>
-  <div class="card kpi"><small>Returns (−)</small><b>${inr(l.ret)}</b></div><div class="card kpi ${l.balance > 0 ? 'red' : 'green'}"><small>Balance</small><b>${inr(l.balance)}</b></div></div>
-  <div class="scroll"><table style="margin-top:12px"><tr><th>Date</th><th>Details</th><th class="r">+ Purchase</th><th class="r">− Paid/Return</th></tr>
-  ${[...l.bills.map(b => ({ d: b.date, t: 'Bill ' + b.id, a: b.total, c: 0 })), ...l.bills.flatMap(b => b.pays.map(x => ({ d: x.date, t: 'Payment for ' + b.id, a: 0, c: x.amt }))),
-    ...l.rets.map(r => ({ d: r.date, t: 'Return ' + r.id + ' – ' + r.item, a: 0, c: r.amount }))].sort((a, b) => a.d.localeCompare(b.d))
-    .map(e => `<tr><td>${fmtD(e.d)}</td><td>${esc(e.t)}</td><td class="r">${e.a ? inr(e.a) : ''}</td><td class="r green">${e.c ? inr(e.c) : ''}</td></tr>`).join('')}</table></div>
-  <h3 style="margin-top:14px">WhatsApp message (${p.type === 'vendor' ? 'payment update' : od.length ? 'overdue reminder' : 'welcome'})</h3><div class="msg">${esc(msg)}</div>
-  <p><a class="btn" style="text-decoration:none;display:inline-block;background:#25d366" target="_blank" href="${waLink(p.phone, msg)}">Open in WhatsApp</a></p>`);
+  const { p, l, rows, head } = statementData(id), od = l.bills.filter(isOver), link = `${location.href.split('#')[0]}#statement/${id}`;
+  const msg = p.type === 'vendor' ? `Dear ${p.name}, this is ${SHOP.name}. Our records show ${inr(l.balance)} payable to you. We will arrange payment as per terms. Please find the account statement attached.`
+    : od.length ? `Dear ${p.name}, greetings from ${SHOP.name}. This is a gentle reminder that ${inr(l.overdue)} is overdue (outstanding balance ${inr(l.balance)}). Kindly arrange payment at your earliest convenience. Your account statement is attached.\nThank you for your valued association.`
+    : `Dear ${p.name}, thank you for your business with ${SHOP.name}. Your current balance is ${inr(l.balance)}. Your account statement is attached.`;
+  const m = v => v === '' ? '' : inr(v);
+  modal(`<h2 class="gold" style="margin-top:0">${SHOP.name}</h2><h3>Account Statement - ${esc(p.name)} (${p.id})</h3>
+  <p style="margin:0 0 10px"><button data-act="printSt" data-v="${id}">🖨 Print</button> <button class="ghost" data-act="pdfSt" data-v="${id}">⬇ Download PDF</button> <button class="wa" data-act="shareSt" data-v="${id}">Send on WhatsApp (PDF)</button></p>
+  <div class="grid g4"><div class="card kpi"><small>${p.type === 'vendor' ? 'Purchases (+)' : 'Sales (+)'}</small><b>${inr(l.total)}</b></div><div class="card kpi green"><small>Paid (-)</small><b>${inr(l.paid)}</b></div>
+  <div class="card kpi"><small>Returns (-)</small><b>${inr(l.ret)}</b></div><div class="card kpi ${l.balance > 0 ? 'red' : 'green'}"><small>Balance</small><b>${inr(l.balance)}</b></div></div>
+  <div class="scroll"><table style="margin-top:12px"><tr>${head.map((h, i) => `<th class="${i > 1 ? 'r' : ''}">${h}</th>`).join('')}</tr>
+  ${rows.map(r => `<tr><td>${r[0]}</td><td>${esc(r[1])}</td><td class="r">${m(r[2])}</td><td class="r green">${m(r[3])}</td><td class="r"><b>${inr(r[4])}</b></td></tr>`).join('') || '<tr><td colspan=5 class="mut">No transactions yet</td></tr>'}</table></div>
+  <h3 style="margin-top:14px">WhatsApp message (${p.type === 'vendor' ? 'payment update' : od.length ? 'overdue reminder' : 'statement'})</h3><div class="msg">${esc(msg)}</div>
+  <p class="hint">On a phone, the PDF is shared straight to WhatsApp. On a computer the PDF downloads and WhatsApp opens with this message - just attach the file. Automatic sending comes with the WhatsApp Business connection.</p>`);
+  window.__stMsg = msg;
 }
-
 /* ---------- Returns ---------- */
 /* returnable lines for a customer: only DELIVERED bills; remaining = billed qty - already returned */
 let retCache = [];
@@ -347,20 +442,58 @@ function vStaff() {
 }
 
 /* ---------- Reports ---------- */
+const rpt = { tab: 'pv', type: 'all', onlyDue: false, from: '', to: '', q: '', status: 'all' };
+const RTABS = [['pv', '1. Billed vs Paid'], ['od', '2. Overdue amounts'], ['rt', '3. Returns'], ['dl', '4. Returns not picked / delayed']];
+function reportData() {
+  const inR = d => (!rpt.from || d >= rpt.from) && (!rpt.to || d <= rpt.to), q = rpt.q.toLowerCase();
+  const parties = db.parties.filter(p => (rpt.type === 'all' || p.type === rpt.type) && (!q || (p.name + p.id + p.city).toLowerCase().includes(q)));
+  const sum = (rows, i) => rows.reduce((t, r) => t + (+r[i] || 0), 0);
+  const filt = [rpt.type !== 'all' ? (rpt.type === 'customer' ? 'Customers only' : 'Suppliers only') : 'Customers & suppliers', rpt.from ? 'From ' + fmtD(rpt.from) : '', rpt.to ? 'To ' + fmtD(rpt.to) : '', rpt.q ? 'Search: ' + rpt.q : ''];
+  if (rpt.tab === 'pv') {
+    const L = parties.map(p => { const bs = db.bills.filter(b => b.partyId === p.id && inR(b.date)), billed = bs.reduce((t, b) => t + b.total, 0), paid = bs.reduce((t, b) => t + paidOf(b), 0);
+      const ret = p.type === 'customer' ? db.returns.filter(r => r.partyId === p.id && inR(r.date)).reduce((t, r) => t + r.amount, 0) : 0, due = billed - paid - ret;
+      return { p, billed, paid, ret, due, od: due > 0 && bs.some(isOver) }; }).filter(x => (x.billed || x.ret) && (!rpt.onlyDue || x.due > 0.005)).sort((a, b) => b.due - a.due);
+    const rows = L.map(x => [`${x.p.name} (${x.p.id})`, x.p.type === 'vendor' ? 'Supplier' : 'Customer', x.p.city, x.billed, x.paid, x.ret, x.due]);
+    return { title: 'Billed vs Paid Report', sub: [...filt, rpt.onlyDue ? 'Only parties with due amount' : ''].filter(Boolean).join(' | '), head: ['Party', 'Type', 'Town / City', 'Billed', 'Paid', 'Returns', 'Due'], types: ['t', 't', 't', 'm', 'm', 'm', 'm'],
+      rows, foot: ['Total', '', '', sum(rows, 3), sum(rows, 4), sum(rows, 5), sum(rows, 6)], flags: L.map(x => x.od), ids: L.map(x => x.p.id) };
+  }
+  if (rpt.tab === 'od') {
+    const L = parties.map(p => { const ob = db.bills.filter(b => b.partyId === p.id && isOver(b) && inR(b.date)); return { p, ob, amt: ob.reduce((t, b) => t + dueOf(b), 0) }; }).filter(x => x.amt > 0).sort((a, b) => b.amt - a.amt);
+    const rows = L.map(x => [`${x.p.name} (${x.p.id})`, x.p.phone, x.p.city, x.ob.length, x.amt, Math.max(...x.ob.map(overDays)), ledger(x.p.id).balance]);
+    return { title: 'Overdue Amounts Report', sub: filt.filter(Boolean).join(' | '), head: ['Party', 'Phone', 'Town / City', 'Overdue bills', 'Overdue amount', 'Max days late', 'Total balance'], types: ['t', 't', 't', 'n', 'm', 'n', 'm'],
+      rows, foot: ['Total', '', '', sum(rows, 3), sum(rows, 4), '', sum(rows, 6)], flags: L.map(() => true), ids: L.map(x => x.p.id) };
+  }
+  if (rpt.tab === 'rt') {
+    const R = db.returns.filter(r => inR(r.date) && (rpt.status === 'all' || r.status === rpt.status) && (!q || ((P(r.partyId)?.name || '') + r.id + (P(r.partyId)?.city || '')).toLowerCase().includes(q)));
+    const rows = R.map(r => [r.id, fmtD(r.date), P(r.partyId)?.name, P(r.partyId)?.city, r.item, r.qty, r.amount, r.status]);
+    return { title: 'Return Material Report', sub: [rpt.from ? 'From ' + fmtD(rpt.from) : '', rpt.to ? 'To ' + fmtD(rpt.to) : '', rpt.status !== 'all' ? 'Status: ' + rpt.status : ''].filter(Boolean).join(' | ') || 'All returns',
+      head: ['Return ID', 'Date', 'Customer', 'Town / City', 'Item', 'Qty', 'Credit', 'Status'], types: ['t', 't', 't', 't', 't', 'n', 'm', 't'], rows, foot: ['Total', '', '', '', '', sum(rows, 5), sum(rows, 6), ''], flags: R.map(retDelayed), ids: R.map(r => r.partyId) };
+  }
+  const D = db.returns.filter(retDelayed).filter(r => !q || ((P(r.partyId)?.name || '') + r.id + (P(r.partyId)?.city || '')).toLowerCase().includes(q));
+  const rows = D.map(r => [r.id, P(r.partyId)?.name, P(r.partyId)?.city, r.item, r.qty, Math.floor((new Date(today()) - new Date(r.date)) / 864e5)]);
+  return { title: 'Returns Not Picked / Delayed', sub: 'Returns waiting for pickup for more than 2 days', head: ['Return ID', 'Customer', 'Town / City', 'Item', 'Qty', 'Days waiting'], types: ['t', 't', 't', 't', 'n', 'n'], rows, foot: null, flags: D.map(() => true), ids: D.map(r => r.partyId) };
+}
 function vReports() {
-  const cs = db.parties.filter(p => p.type === 'customer');
-  const rows = cs.map(c => ({ c, l: ledger(c.id) }));
-  const del = db.returns.filter(retDelayed);
-  return `<div class="grid">
-  <div class="card scroll"><h3>1. Purchase vs Paid report</h3><table><tr><th>Party</th><th class="r">Purchase</th><th class="r">Paid</th><th class="r">Returns</th><th class="r">Balance</th></tr>
-  ${db.parties.map(p => ({ p, l: ledger(p.id) })).map(({ p, l }) => `<tr><td>${esc(p.name)} ${p.type === 'vendor' ? tag('Supplier', 'gold') : ''}</td><td class="r">${inr(l.total)}</td><td class="r">${inr(l.paid)}</td><td class="r">${inr(l.ret)}</td><td class="r">${inr(l.balance)}</td></tr>`).join('')}</table></div>
-  <div class="card scroll"><h3>2. Customer-wise overdue amounts</h3><table><tr><th>Customer</th><th>Phone</th><th class="r">Overdue</th><th class="r">Max days late</th><th></th></tr>
-  ${rows.filter(x => x.l.overdue > 0).map(({ c, l }) => `<tr class="overdue"><td>${esc(c.name)}<br><small class="mut">${c.id}</small></td><td>${esc(c.phone)}</td><td class="r">${inr(l.overdue)}</td><td class="r">${Math.max(...l.bills.filter(isOver).map(overDays))}</td>
-  <td><button class="sm wa" data-act="statement" data-v="${c.id}">Remind</button></td></tr>`).join('') || '<tr><td colspan=5 class="mut">No overdue 🎉</td></tr>'}</table></div>
-  <div class="card scroll"><h3>3. Return material report</h3><table><tr><th>ID</th><th>Date</th><th>Customer</th><th>Item</th><th class="r">Credit</th><th>Status</th></tr>
-  ${db.returns.map(r => `<tr><td>${r.id}</td><td>${fmtD(r.date)}</td><td>${esc(P(r.partyId)?.name)}</td><td>${esc(r.item)} ×${r.qty}</td><td class="r">${inr(r.amount)}</td><td>${tag(r.status, r.status === 'Pending Pickup' ? 'gold' : 'green')}</td></tr>`).join('') || '<tr><td colspan=6 class="mut">None</td></tr>'}</table></div>
-  <div class="card scroll"><h3>4. Returns not picked / delayed by vehicle</h3><table><tr><th>ID</th><th>Customer</th><th>Town</th><th>Item</th><th>Waiting</th></tr>
-  ${del.map(r => `<tr class="overdue"><td>${r.id}</td><td>${esc(P(r.partyId)?.name)}</td><td>${esc(P(r.partyId)?.city)}</td><td>${esc(r.item)}</td><td>${Math.floor((new Date(today()) - new Date(r.date)) / 864e5)} days</td></tr>`).join('') || '<tr><td colspan=5 class="mut">Nothing delayed 🎉</td></tr>'}</table></div></div>`;
+  const r = reportData(), cell = (v, t) => t === 'm' ? inr(v) : esc(v ?? ''), show = k => rpt.tab === k;
+  const f = (l, inner) => `<div class="f"><label>${l}</label>${inner}</div>`;
+  return `<div class="card"><div class="rtabs">${RTABS.map(([k, l]) => `<button class="sm ${rpt.tab === k ? '' : 'ghost'}" data-act="rtab" data-v="${k}">${l}</button>`).join(' ')}</div>
+  <div class="row" style="margin-top:12px">
+   ${show('pv') || show('od') ? f('Show', `<select data-input="rpt" data-k="type"><option value="all" ${rpt.type === 'all' ? 'selected' : ''}>Customers &amp; suppliers</option><option value="customer" ${rpt.type === 'customer' ? 'selected' : ''}>Customers only</option><option value="vendor" ${rpt.type === 'vendor' ? 'selected' : ''}>Suppliers only</option></select>`) : ''}
+   ${show('rt') ? f('Status', `<select data-input="rpt" data-k="status"><option value="all">All</option><option ${rpt.status === 'Pending Pickup' ? 'selected' : ''}>Pending Pickup</option><option ${rpt.status === 'Picked' ? 'selected' : ''}>Picked</option></select>`) : ''}
+   ${show('dl') ? '' : f('From date', `<input type="date" data-input="rpt" data-k="from" value="${rpt.from}">`) + f('To date', `<input type="date" data-input="rpt" data-k="to" value="${rpt.to}">`)}
+   ${f('Search', `<input data-input="rpt" data-k="q" placeholder="name / code / town" value="${esc(rpt.q)}">`)}
+   ${show('pv') ? `<label class="chk"><input type="checkbox" data-input="rpt" data-k="onlyDue" ${rpt.onlyDue ? 'checked' : ''}> Only with due amount</label>` : ''}
+  </div>
+  <p style="margin:6px 0 0"><button data-act="rprint">🖨 Print</button> <button class="ghost" data-act="rpdf">⬇ PDF</button> <button class="ghost" data-act="rcsv">⬇ Excel / CSV</button> <span class="hint">${r.rows.length} record(s)</span></p></div>
+  <div class="card scroll" style="margin-top:14px"><h3>${r.title}</h3><p class="hint">${esc(r.sub)}</p>
+  <table class="rt"><thead><tr>${r.head.map((h, i) => `<th class="${r.types[i] !== 't' ? 'r' : ''}">${h}</th>`).join('')}<th></th></tr></thead><tbody>
+  ${r.rows.map((row, n) => `<tr class="${r.flags[n] ? 'overdue' : ''}">${row.map((v, i) => `<td class="${r.types[i] !== 't' ? 'r' : ''}">${cell(v, r.types[i])}</td>`).join('')}
+   <td>${P(r.ids[n]) ? `<button class="sm ghost" data-act="statement" data-v="${r.ids[n]}">Statement</button>` : ''}</td></tr>`).join('') || `<tr><td colspan="${r.head.length + 1}" class="mut">No records for the selected filters</td></tr>`}</tbody>
+  ${r.foot ? `<tfoot><tr>${r.foot.map((v, i) => `<td class="${r.types[i] !== 't' ? 'r' : ''}">${v === '' ? '' : cell(v, r.types[i])}</td>`).join('')}<td></td></tr></tfoot>` : ''}</table></div>`;
+}
+function downloadCsv(r) {
+  const q = v => '"' + String(v ?? '').replace(/"/g, '""') + '"', lines = [r.head.map(q).join(','), ...r.rows.map(row => row.map(q).join(',')), ...(r.foot ? [r.foot.map(q).join(',')] : [])];
+  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob(['\ufeff' + lines.join('\n')], { type: 'text/csv' })); a.download = r.title.replace(/\W+/g, '-') + '.csv'; a.click();
 }
 
 /* ---------- place suggestions ---------- */
@@ -379,6 +512,11 @@ function showSug(inp) {
 
 /* ---------- events ---------- */
 const ACT = {
+  rtab: v => { rpt.tab = v; render(); }, rprint: () => printDoc(reportDoc(reportData())), rpdf: () => { const r = reportData(); reportPdf(r).save(r.title.replace(/\W+/g, '-') + '.pdf'); }, rcsv: () => downloadCsv(reportData()),
+  printInv: v => printDoc(invoiceDoc(db.bills.find(b => b.id === v))), pdfInv: v => invoicePdf(db.bills.find(b => b.id === v)).save(v + '.pdf'),
+  shareInv: v => { const b = db.bills.find(x => x.id === v), p = P(b.partyId); sharePdf(invoicePdf(b), v + '.pdf', `${SHOP.name} - ${p.type === 'vendor' ? 'purchase bill' : 'invoice'} ${v}: total ${inr(b.total)}, balance ${inr(dueOf(b))}. PDF attached.`, p.phone); },
+  printSt: v => printDoc(statementDoc(v)), pdfSt: v => statementPdf(v).save('Statement-' + v + '.pdf'),
+  shareSt: v => sharePdf(statementPdf(v), 'Statement-' + v + '.pdf', window.__stMsg || 'Account statement attached.', P(v).phone),
   go: v => go(v), billf: v => { billFilter = v; render(); }, closeModal, print: () => window.print(), addRow,
   pick: (v, el) => { sel[el.dataset.t] = v; render(); },
   pickPlace: (v, el) => { const f = el.closest('form'); f.querySelector('[name=city]').value = v; const st = el.dataset.s, sel = f.querySelector('select[name=state]'); if (sel && st && [...sel.options].some(o => o.value === st)) sel.value = st; $('#sug').innerHTML = ''; },
@@ -394,6 +532,7 @@ $('#burger').onclick = () => $('#side').classList.toggle('open');
 document.addEventListener('input', e => {
   const k = e.target.dataset.input; if (!k) return;
   if (k === 'filt') { filt = e.target.value; const pos = e.target.selectionStart; render(); const i = $('[data-input=filt]'); i.focus(); i.setSelectionRange(pos, pos); }
+  if (k === 'rpt') { const t = e.target; rpt[t.dataset.k] = t.type === 'checkbox' ? t.checked : t.value; const pos = t.selectionStart, kk = t.dataset.k; render(); if (kk === 'q') { const i = $('[data-k=q]'); i.focus(); try { i.setSelectionRange(pos, pos); } catch (_) {} } }
   if (k === 'place') showSug(e.target);
   if (k === 'calc') recalc();
   if (k === 'fill') { const it = (window.__items || {})[e.target.value]; if (it) { const r = e.target.closest('tr'); r.querySelector('[name=desc]').value = it.desc; r.querySelector('[name=price]').value = it.price; recalc(); } }

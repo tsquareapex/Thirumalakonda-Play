@@ -80,7 +80,6 @@ tr.overdue td{background:#fde8e988}tr.overdue td:first-child{border-left:4px sol
 #login.hidden,#app.hidden{display:none!important}
 .rowline{border-bottom:1px solid var(--line)}
 @media(max-width:800px){#side{position:fixed;left:-250px;transition:.25s}#side.open{left:0}#burger{display:block;padding:6px 10px}#view{padding:14px}}
-@media print{body *{visibility:hidden}.inv,.inv *{visibility:visible}.inv{position:absolute;left:0;top:0;width:100%}}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important}}
 
 /* ---- interior line-art background (multiple furniture illustrations, gold, drifting slowly) ---- */
@@ -124,3 +123,23 @@ tr.overdue td{background:#fde8e988}tr.overdue td:first-child{border-left:4px sol
 
 #side .brand b.bn span{font-size:inherit;letter-spacing:normal}
 #side .brand b.bn{font-size:17px;letter-spacing:.5px;white-space:nowrap}
+
+/* report screen */
+.rtabs{display:flex;flex-wrap:wrap;gap:6px}.chk{display:flex!important;align-items:center;gap:8px;font-size:14px!important;color:var(--ink)!important;padding-bottom:12px;flex:0 0 auto!important}.chk input{width:auto}
+table.rt th{background:#fbf1d2}table.rt tfoot td{font-weight:700;background:#fdf1c8;border-top:2px solid var(--gold)}
+/* print layout: only the document is printed, clean black on white */
+#printarea{display:none}
+@media print{
+  @page{size:A4;margin:12mm}
+  html,body{background:#fff!important;display:block!important;min-height:0!important}
+  body::before,body::after,.bgart,#app,#login,#modal,#toast{display:none!important}
+  #printarea{display:block!important;color:#000}
+  .pdoc{font:12.5px/1.45 Arial,Helvetica,sans-serif;color:#000}
+  .pd-hd{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid #b8901f;padding-bottom:8px;margin-bottom:12px}
+  .pd-shop{font-size:22px;font-weight:700;color:#7a5a00}.pd-r{text-align:right}.pd-title{display:block;font-size:18px;color:#000;margin-bottom:4px}
+  .pd-party{margin:8px 0 12px;padding:8px 10px;border:1px solid #bbb;border-radius:4px}
+  table.pd-t{width:100%;border-collapse:collapse;margin:8px 0}.pd-t th{background:#f3e6b3;color:#000;border:1px solid #888;padding:6px 7px;text-align:left;font-size:12px;text-transform:none;letter-spacing:0}
+  .pd-t td{border:1px solid #999;padding:5px 7px;color:#000;background:#fff}.pd-t .r{text-align:right}.pd-t tfoot td{font-weight:700;background:#faf3d6}.pd-big td{font-size:14px}
+  .pd-sum td{font-size:14px}.pd-note{font-size:11px;color:#333}.pd-sign{display:flex;justify-content:space-between;margin-top:46px}.pd-sign div{border-top:1px solid #000;padding-top:4px;min-width:170px;text-align:center}
+  tr{page-break-inside:avoid}thead{display:table-header-group}
+}
