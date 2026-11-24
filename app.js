@@ -350,7 +350,7 @@ document.addEventListener('submit', e => {
   if (f === 'createBill') {
     const items = [...document.querySelectorAll('#items tr')].slice(1).map(r => ({ code: r.querySelector('[name=code]').value, desc: r.querySelector('[name=desc]').value, qty: +r.querySelector('[name=qty]').value, price: +r.querySelector('[name=price]').value })).filter(i => (i.code || i.desc) && i.qty > 0);
     if (!items.length) return toast('Add at least one item');
-    const bid = addBill(d.party, d.date, items, +d.paid || 0, d.delivery); save(); sel.customer = d.party; go('bills'); invoiceModal(bid);
+    const tot = items.reduce((a, i) => a + i.qty * i.price, 0), bid = addBill(d.party, d.date, items, Math.min(Math.max(+d.paid || 0, 0), tot), d.delivery); save(); sel.customer = d.party; go('bills'); invoiceModal(bid);
   }
   if (f === 'createReturn') {
     const [bill, item] = (d.item || '').split('|'); if (!bill || !item) return toast('Pick customer & item');
