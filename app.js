@@ -92,9 +92,10 @@ function ledger(pid) {
 const retDelayed = r => r.status === 'Pending Pickup' && today() > addDays(r.date, 2);
 
 /* ---------- UI plumbing ---------- */
-const NAV = [['dash', '📊 Dashboard'], ['customers', '👥 Customers'], ['bill', '🧾 New Bill'], ['bills', '📚 All Bills'], ['returns', '↩️ Returns'],
-  ['route', '🚚 Driver Route'], ['vendors', '🏭 Vendors'], ['staff', '🧑‍🔧 Employees'], ['reports', '📈 Reports']];
-let page = 'dash', sel = { customer: null, vendor: null }, filt = '';
+const NAV = [['dash', '📊 Customer Dashboard'], ['sdash', '🏭 Supplier Dashboard'], ['customers', '👥 Customers'], ['vendors', '🚛 Suppliers'],
+  ['bill', '🧾 Customer Bill'], ['sbill', '🧾 Supplier Bill'], ['bills', '📚 All Bills'], ['returns', '↩️ Returns'],
+  ['route', '🚚 Driver Route'], ['staff', '🧑‍🔧 Employees'], ['reports', '📈 Reports']];
+let page = 'dash', sel = { customer: null, vendor: null }, filt = '', billFilter = 'all';
 const go = p => { page = p; $('#side').classList.remove('open'); render(); };
 function toast(t) { const e = $('#toast'); e.textContent = t; e.classList.add('show'); setTimeout(() => e.classList.remove('show'), 2200); }
 function modal(html) { $('#mbody').innerHTML = html; $('#modal').classList.remove('hidden'); }
@@ -106,12 +107,38 @@ function render() {
   $('#nav').innerHTML = NAV.map(([k, l]) => `<a class="${k === page ? 'on' : ''}" data-act="go" data-v="${k}">${l}</a>`).join('');
   $('#title').textContent = (NAV.find(n => n[0] === page) || [])[1]?.replace(/^\S+\s/, '') || '';
   $('#topact').innerHTML = `<span class="mut">${fmtD(today())}</span>`;
-  $('#view').innerHTML = ({ dash: vDash, customers: () => vParties('customer'), vendors: () => vParties('vendor'), bill: vBill, bills: vBills,
+  $('#view').innerHTML = ({ dash: vDash, customers: () => vParties('customer'), vendors: () => vParties('vendor'), sdash: vSDash, bill: () => vBill('customer'), sbill: () => vBill('vendor'), bills: vBills,
     returns: vReturns, route: vRoute, staff: vStaff, reports: vReports })[page]();
-  if (page === 'bill') recalc();
+  if (page === 'bill' || page === 'sbill') recalc();
 }
 
-/* ---------- Dashboard ---------- */
+/* ---------- Supplier dashboard ---------- */
+function vSDash() {
+  const vs = db.parties.filter(p => p.type === 'vendor'), L = vs.map(v => ({ v, l: ledger(v.id) }));
+  const sum = k => L.reduce((t, x) => t + x.l[k], 0), od = L.filter(x => x.l.isOver);
+  const pend = db.bills.filter(b => b.delivery === 'Pending' && P(b.partyId)?.type === 'vendor');
+  const recent = db.bills.filter(b => P(b.partyId)?.type === 'vendor').slice(-6).reverse();
+  return `
+  <div class="grid g4">
+    <div class="card kpi"><small>Total Purchases</small><b>${inr(sum('total'))}</b></div>
+    <div class="card kpi green"><small>Paid to Suppliers</small><b>${inr(sum('paid'))}</b></div>
+    <div class="card kpi red"><small>Overdue Payable</small><b>${inr(sum('overdue'))}</b><small>${od.length} supplier(s)</small></div>
+    <div class="card kpi"><small>Net Payable</small><b>${inr(sum('balance'))}</b></div>
+    <div class="card kpi"><small>Goods Awaiting Receipt</small><b>${pend.length}</b></div>
+    <div class="card kpi"><small>Suppliers</small><b>${vs.length}</b></div>
+  </div>
+  <div class="grid g2" style="margin-top:14px">
+    <div class="card"><h3>Suppliers — select to see full picture</h3>
+      <input placeholder="🔍 Search name / code / city" value="${esc(filt)}" data-input="filt">
+      <div class="plist" style="margin-top:8px">${partyList(vs, 'vendor')}</div></div>
+    <div class="card" id="detail">${sel.vendor ? partyDetail(sel.vendor) : '<p class="mut">👈 Pick a supplier to see purchases, paid, overdue payable and bill history.</p>'}</div>
+  </div>
+  <div class="card scroll" style="margin-top:14px"><h3>Recent supplier bills</h3><table><tr><th>Bill</th><th>Date</th><th>Supplier</th><th class="r">Total</th><th class="r">Paid</th><th class="r">Due</th><th></th></tr>
+  ${recent.map(b => `<tr class="${isOver(b) ? 'overdue' : ''}"><td>${b.id}</td><td>${fmtD(b.date)}</td><td>${esc(P(b.partyId)?.name)}</td><td class="r">${inr(b.total)}</td><td class="r">${inr(paidOf(b))}</td><td class="r">${inr(dueOf(b))}</td>
+  <td>${dueOf(b) > 0 ? `<button class="sm" data-act="pay" data-v="${b.id}">Pay</button> ` : tag('Paid', 'green')}<button class="sm ghost" data-act="invoice" data-v="${b.id}">View</button></td></tr>`).join('') || '<tr><td colspan=7 class="mut">No supplier bills yet</td></tr>'}</table></div>`;
+}
+
+/* ---------- Customer dashboard ---------- */
 function vDash() {
   const cs = db.parties.filter(p => p.type === 'customer'), L = cs.map(c => ({ c, l: ledger(c.id) }));
   const sum = k => L.reduce((s, x) => s + x.l[k], 0);
@@ -126,7 +153,7 @@ function vDash() {
     <div class="card kpi"><small>Net Balance (after returns)</small><b>${inr(sum('balance'))}</b></div>
     <div class="card kpi"><small>Returns Pending Pickup</small><b>${pendRet.length}</b><small>${pendRet.filter(retDelayed).length} delayed</small></div>
     <div class="card kpi"><small>Deliveries Pending</small><b>${pendDel.length}</b></div>
-    <div class="card kpi"><small>Payable to Vendors</small><b>${inr(vl.reduce((s, l) => s + l.balance, 0))}</b></div>
+    <div class="card kpi"><small>Customers</small><b>${cs.length}</b></div>
     <div class="card kpi"><small>Employees</small><b>${db.employees.length}</b></div>
   </div>
   <div class="grid g2" style="margin-top:14px">
@@ -151,10 +178,10 @@ function partyDetail(id) {
     <span class="mut">${p.id} · ${esc(p.address)} ${esc(p.city)}, ${esc(p.state)}<br>📞 ${esc(p.phone || '—')} ${p.email ? '· ✉ ' + esc(p.email) : ''} · Tolerance ${p.tol} days</span></div>
     <div class="r"><button class="sm" data-act="statement" data-v="${id}">Statement / Link</button> <button class="sm ghost" data-act="editParty" data-v="${id}">Edit</button></div></div>
   <div class="grid g4" style="margin:12px 0">
-    <div class="card kpi"><small>Total Business</small><b>${inr(l.total)}</b></div>
+    <div class="card kpi"><small>${isC ? 'Total Business' : 'Total Purchases'}</small><b>${inr(l.total)}</b></div>
     <div class="card kpi green"><small>Paid</small><b>${inr(l.paid)}</b></div>
     <div class="card kpi ${l.overdue ? 'red' : ''}"><small>Overdue</small><b>${inr(l.overdue)}</b></div>
-    <div class="card kpi"><small>Returns credited</small><b>${inr(l.ret)}</b></div>
+    ${isC ? `<div class="card kpi"><small>Returns credited</small><b>${inr(l.ret)}</b></div>` : `<div class="card kpi"><small>Bills</small><b>${l.bills.length}</b></div>`}
   </div>
   <p style="font-size:18px">Balance ${isC ? 'to receive' : 'to pay'}: <b class="${l.balance > 0 ? 'red' : 'green'}">${inr(l.balance)}</b></p>
   <div class="scroll"><table><tr><th>Bill</th><th>Date</th><th class="r">Total</th><th class="r">Paid</th><th class="r">Due</th><th></th></tr>
@@ -163,11 +190,11 @@ function partyDetail(id) {
   ${l.rets.length ? `<h3 style="margin-top:14px">Returns</h3>` + l.rets.map(r => `<div>${r.id} · ${esc(r.item)} ×${r.qty} · ${inr(r.amount)} ${tag(r.status, r.status === 'Pending Pickup' ? 'gold' : 'green')}</div>`).join('') : ''}`;
 }
 
-/* ---------- Customers / Vendors ---------- */
+/* ---------- Customers / Suppliers ---------- */
 function vParties(type) {
   const arr = db.parties.filter(p => p.type === type), isC = type === 'customer';
-  return `<div class="grid g2"><div class="card"><h3>${isC ? 'Customers' : 'Vendors'} (${arr.length})</h3>
-    <button data-act="newParty" data-v="${type}">＋ New ${isC ? 'Customer' : 'Vendor'}</button>
+  return `<div class="grid g2"><div class="card"><h3>${isC ? 'Customers' : 'Suppliers'} (${arr.length})</h3>
+    <button data-act="newParty" data-v="${type}">＋ New ${isC ? 'Customer' : 'Supplier'}</button>
     <input style="margin-top:10px" placeholder="🔍 Search" value="${esc(filt)}" data-input="filt"><div class="plist" style="margin-top:8px">${partyList(arr, type)}</div></div>
     <div class="card" id="detail">${sel[type] ? partyDetail(sel[type]) : '<p class="mut">Select from the list to see the dashboard.</p>'}</div></div>`;
 }
@@ -178,7 +205,7 @@ function partyForm(type, p = {}) {
     <div class="f"><label>State</label><input name="state" value="Andhra Pradesh" readonly></div>`
     : `<div class="row"><div class="f"><label>State</label><select name="state">${OTHER_STATES.map(s => `<option ${s === (p.state || 'Telangana') ? 'selected' : ''}>${s}</option>`).join('')}</select></div>
     <div class="f placebox"><label>City / Town (type to search or enter any)</label><input name="city" autocomplete="off" data-input="place" data-kind="vendor" value="${esc(p.city || '')}" placeholder="Any city or town"><div class="sug-box" id="sug"></div></div></div>`;
-  return `<h3>${p.id ? 'Edit' : 'New'} ${isC ? 'Customer' : 'Vendor'} ${p.id ? '· ' + p.id : ''}</h3><form data-form="${p.id ? 'saveParty' : 'createParty'}" data-id="${p.id || ''}" data-type="${type}">
+  return `<h3>${p.id ? 'Edit' : 'New'} ${isC ? 'Customer' : 'Supplier'} ${p.id ? '· ' + p.id : ''}</h3><form data-form="${p.id ? 'saveParty' : 'createParty'}" data-id="${p.id || ''}" data-type="${type}">
     <p class="hint">All fields are optional. The ID is generated automatically from the town.</p>
     <div class="f"><label>Name</label><input name="name" value="${esc(p.name || '')}"></div>
     <div class="f"><label>Address description</label><input name="address" value="${esc(p.address || '')}"></div>${loc}
@@ -189,20 +216,21 @@ function partyForm(type, p = {}) {
 }
 
 /* ---------- Billing ---------- */
-function vBill() {
-  const cs = db.parties.slice().sort((a, b) => a.type.localeCompare(b.type));
+function vBill(kind) {
+  const sup = kind === 'vendor', cs = db.parties.filter(p => p.type === kind);
   const items = {}; db.bills.forEach(b => b.items.forEach(i => items[i.code] = i));
-  const html = `<div class="card" style="max-width:900px"><h3>Create Bill</h3><form data-form="createBill">
-   <div class="row"><div class="f"><label>Customer / Vendor</label><select name="party" required><option value="">— select —</option>
-     ${cs.map(p => `<option value="${p.id}" ${sel.customer === p.id ? 'selected' : ''}>${esc(p.name)} (${p.id})${p.type === 'vendor' ? ' – purchase' : ''}</option>`).join('')}</select></div>
+  const html = `<div class="card" style="max-width:900px"><h3>${sup ? 'Supplier Bill — goods purchased from a supplier' : 'Customer Bill — goods sold to a customer'}</h3>
+   ${cs.length ? '' : `<p class="red">No ${sup ? 'suppliers' : 'customers'} yet — create one first.</p>`}<form data-form="createBill" data-kind="${kind}">
+   <div class="row"><div class="f"><label>${sup ? 'Supplier' : 'Customer'}</label><select name="party" required><option value="">— select —</option>
+     ${cs.map(p => `<option value="${p.id}" ${sel[kind] === p.id ? 'selected' : ''}>${esc(p.name)} (${p.id}) — ${esc(p.city)}</option>`).join('')}</select></div>
    <div class="f"><label>Bill date</label><input type="date" name="date" value="${today()}"></div></div>
    <datalist id="codes">${Object.values(items).map(i => `<option value="${esc(i.code)}">${esc(i.desc)}</option>`).join('')}</datalist>
-   <table id="items"><tr><th>Item code</th><th>Description</th><th>Qty</th><th>Price</th><th class="r">Amount</th></tr></table>
+   <table id="items"><tr><th>Item code</th><th>Description</th><th>Qty</th><th>${sup ? 'Purchase price' : 'Price'}</th><th class="r">Amount</th></tr></table>
    <p><button type="button" class="ghost sm" data-act="addRow">＋ Add item</button></p>
-   <div class="row"><div class="f"><label>Paid now (₹) — leave 0 if credit</label><input type="number" name="paid" value="0" min="0"></div>
-   <div class="f"><label>Delivery</label><select name="delivery"><option>Pending</option><option>Delivered</option></select></div>
+   <div class="row"><div class="f"><label>${sup ? 'Paid now to supplier (₹)' : 'Paid now (₹)'} — leave 0 if credit</label><input type="number" name="paid" value="0" min="0"></div>
+   <div class="f"><label>${sup ? 'Goods received?' : 'Delivery'}</label><select name="delivery"><option value="Pending">${sup ? 'Not received yet' : 'Pending'}</option><option value="Delivered">${sup ? 'Received' : 'Delivered'}</option></select></div>
    <div class="f"><label>Total</label><div style="font-size:26px" class="gd" id="grand">₹0</div></div></div>
-   <button>Save &amp; Generate Invoice</button></form></div>`;
+   <button>${sup ? 'Save Supplier Bill' : 'Save &amp; Generate Invoice'}</button></form></div>`;
   window.__items = items; setTimeout(addRow, 0); return html;
 }
 function addRow() {
@@ -215,12 +243,14 @@ function recalc() {
   const e = $('#grand'); if (e) e.textContent = inr(g);
 }
 function vBills() {
-  const bs = db.bills.slice().reverse();
-  return `<div class="card scroll"><table><tr><th>Bill</th><th>Date</th><th>Party</th><th class="r">Total</th><th class="r">Paid</th><th class="r">Due</th><th>Delivery</th><th></th></tr>
-  ${bs.map(b => { const p = P(b.partyId); return `<tr class="${isOver(b) ? 'overdue' : ''}"><td>${b.id}</td><td>${fmtD(b.date)}</td><td>${esc(p?.name)} ${p?.type === 'vendor' ? tag('Vendor', 'gold') : ''}</td>
-  <td class="r">${inr(b.total)}</td><td class="r">${inr(paidOf(b))}</td><td class="r">${inr(dueOf(b))}</td><td>${tag(b.delivery, b.delivery === 'Delivered' ? 'green' : 'gold')}</td>
+  const bs = db.bills.slice().reverse().filter(b => billFilter === 'all' || P(b.partyId)?.type === billFilter);
+  const fb = (k, l) => `<button class="sm ${billFilter === k ? '' : 'ghost'}" data-act="billf" data-v="${k}">${l}</button> `;
+  return `<div class="card scroll"><p>${fb('all', 'All bills')}${fb('customer', 'Customer bills')}${fb('vendor', 'Supplier bills')}</p>
+  <table><tr><th>Bill</th><th>Date</th><th>Party</th><th class="r">Total</th><th class="r">Paid</th><th class="r">Due</th><th>Delivery / Receipt</th><th></th></tr>
+  ${bs.map(b => { const p = P(b.partyId), sup = p?.type === 'vendor'; return `<tr class="${isOver(b) ? 'overdue' : ''}"><td>${b.id}</td><td>${fmtD(b.date)}</td><td>${esc(p?.name)} ${sup ? tag('Supplier', 'gold') : ''}</td>
+  <td class="r">${inr(b.total)}</td><td class="r">${inr(paidOf(b))}</td><td class="r">${inr(dueOf(b))}</td><td>${tag(b.delivery === 'Delivered' ? (sup ? 'Received' : 'Delivered') : (sup ? 'Not received' : 'Pending'), b.delivery === 'Delivered' ? 'green' : 'gold')}</td>
   <td>${dueOf(b) > 0 ? `<button class="sm" data-act="pay" data-v="${b.id}">Pay</button> ` : ''}<button class="sm ghost" data-act="invoice" data-v="${b.id}">View</button>
-  ${b.delivery === 'Pending' ? `<button class="sm ghost" data-act="deliver" data-v="${b.id}">Delivered ✓</button>` : ''}</td></tr>`; }).join('')}</table></div>`;
+  ${b.delivery === 'Pending' ? `<button class="sm ghost" data-act="deliver" data-v="${b.id}">${sup ? 'Received ✓' : 'Delivered ✓'}</button>` : ''}</td></tr>`; }).join('') || '<tr><td colspan=8 class="mut">No bills</td></tr>'}</table></div>`;
 }
 function invoiceHtml(b) {
   const p = P(b.partyId);
@@ -234,7 +264,8 @@ function invoiceHtml(b) {
 }
 function invoiceModal(id) {
   const b = db.bills.find(x => x.id === id), p = P(b.partyId);
-  const msg = `Dear ${p.name}, thank you for shopping at ${SHOP.name}. Your bill ${b.id} dated ${fmtD(b.date)} for ${inr(b.total)} is ready. Paid: ${inr(paidOf(b))}, Balance: ${inr(dueOf(b))}.`;
+  const msg = p.type === 'vendor' ? `Dear ${p.name}, ${SHOP.name} has recorded purchase bill ${b.id} dated ${fmtD(b.date)} for ${inr(b.total)}. Paid: ${inr(paidOf(b))}, Balance payable: ${inr(dueOf(b))}.`
+    : `Dear ${p.name}, thank you for shopping at ${SHOP.name}. Your bill ${b.id} dated ${fmtD(b.date)} for ${inr(b.total)} is ready. Paid: ${inr(paidOf(b))}, Balance: ${inr(dueOf(b))}.`;
   modal(invoiceHtml(b) + `<p style="margin-top:12px"><button data-act="print">🖨 Print / PDF</button> <a class="btn" style="text-decoration:none;display:inline-block;background:#25d366" target="_blank" href="${waLink(p.phone, msg)}">Send on WhatsApp</a></p><div class="msg">${esc(msg)}</div><p class="hint">Auto-send via WhatsApp/SMS will be connected later; this opens WhatsApp with the message ready.</p>`);
 }
 function payModal(id) {
@@ -245,7 +276,8 @@ function payModal(id) {
 function statementModal(id) {
   const p = P(id), l = ledger(id);
   const od = l.bills.filter(isOver), link = `${location.href.split('#')[0]}#statement/${id}`;
-  const msg = od.length
+  const msg = p.type === 'vendor' ? `Dear ${p.name}, this is ${SHOP.name}. Our records show ${inr(l.balance)} payable to you. We will arrange payment as per terms. Statement: ${link}`
+    : od.length
     ? `Dear ${p.name}, greetings from ${SHOP.name}. This is a gentle reminder that ${inr(l.overdue)} is overdue (outstanding balance ${inr(l.balance)}). Kindly arrange payment at your earliest convenience. View your complete purchase & payment history: ${link}\nThank you for your valued association.`
     : `Dear ${p.name}, welcome to ${SHOP.name}! Your account balance is ${inr(l.balance)}. History: ${link}`;
   modal(`<h2 class="gold" style="margin-top:0">${SHOP.name}</h2><h3>Account Statement — ${esc(p.name)} (${p.id})</h3>
@@ -255,7 +287,7 @@ function statementModal(id) {
   ${[...l.bills.map(b => ({ d: b.date, t: 'Bill ' + b.id, a: b.total, c: 0 })), ...l.bills.flatMap(b => b.pays.map(x => ({ d: x.date, t: 'Payment for ' + b.id, a: 0, c: x.amt }))),
     ...l.rets.map(r => ({ d: r.date, t: 'Return ' + r.id + ' – ' + r.item, a: 0, c: r.amount }))].sort((a, b) => a.d.localeCompare(b.d))
     .map(e => `<tr><td>${fmtD(e.d)}</td><td>${esc(e.t)}</td><td class="r">${e.a ? inr(e.a) : ''}</td><td class="r green">${e.c ? inr(e.c) : ''}</td></tr>`).join('')}</table></div>
-  <h3 style="margin-top:14px">WhatsApp message (${od.length ? 'overdue reminder' : 'welcome'})</h3><div class="msg">${esc(msg)}</div>
+  <h3 style="margin-top:14px">WhatsApp message (${p.type === 'vendor' ? 'payment update' : od.length ? 'overdue reminder' : 'welcome'})</h3><div class="msg">${esc(msg)}</div>
   <p><a class="btn" style="text-decoration:none;display:inline-block;background:#25d366" target="_blank" href="${waLink(p.phone, msg)}">Open in WhatsApp</a></p>`);
 }
 
@@ -321,7 +353,7 @@ function vReports() {
   const del = db.returns.filter(retDelayed);
   return `<div class="grid">
   <div class="card scroll"><h3>1. Purchase vs Paid report</h3><table><tr><th>Party</th><th class="r">Purchase</th><th class="r">Paid</th><th class="r">Returns</th><th class="r">Balance</th></tr>
-  ${db.parties.map(p => ({ p, l: ledger(p.id) })).map(({ p, l }) => `<tr><td>${esc(p.name)} ${p.type === 'vendor' ? tag('Vendor', 'gold') : ''}</td><td class="r">${inr(l.total)}</td><td class="r">${inr(l.paid)}</td><td class="r">${inr(l.ret)}</td><td class="r">${inr(l.balance)}</td></tr>`).join('')}</table></div>
+  ${db.parties.map(p => ({ p, l: ledger(p.id) })).map(({ p, l }) => `<tr><td>${esc(p.name)} ${p.type === 'vendor' ? tag('Supplier', 'gold') : ''}</td><td class="r">${inr(l.total)}</td><td class="r">${inr(l.paid)}</td><td class="r">${inr(l.ret)}</td><td class="r">${inr(l.balance)}</td></tr>`).join('')}</table></div>
   <div class="card scroll"><h3>2. Customer-wise overdue amounts</h3><table><tr><th>Customer</th><th>Phone</th><th class="r">Overdue</th><th class="r">Max days late</th><th></th></tr>
   ${rows.filter(x => x.l.overdue > 0).map(({ c, l }) => `<tr class="overdue"><td>${esc(c.name)}<br><small class="mut">${c.id}</small></td><td>${esc(c.phone)}</td><td class="r">${inr(l.overdue)}</td><td class="r">${Math.max(...l.bills.filter(isOver).map(overDays))}</td>
   <td><button class="sm wa" data-act="statement" data-v="${c.id}">Remind</button></td></tr>`).join('') || '<tr><td colspan=5 class="mut">No overdue 🎉</td></tr>'}</table></div>
@@ -347,7 +379,7 @@ function showSug(inp) {
 
 /* ---------- events ---------- */
 const ACT = {
-  go: v => go(v), closeModal, print: () => window.print(), addRow,
+  go: v => go(v), billf: v => { billFilter = v; render(); }, closeModal, print: () => window.print(), addRow,
   pick: (v, el) => { sel[el.dataset.t] = v; render(); },
   pickPlace: (v, el) => { const f = el.closest('form'); f.querySelector('[name=city]').value = v; const st = el.dataset.s, sel = f.querySelector('select[name=state]'); if (sel && st && [...sel.options].some(o => o.value === st)) sel.value = st; $('#sug').innerHTML = ''; },
   newParty: v => modal(partyForm(v)), editParty: v => modal(partyForm(P(v).type, P(v))),
@@ -384,7 +416,8 @@ document.addEventListener('submit', e => {
   if (f === 'createBill') {
     const items = [...document.querySelectorAll('#items tr')].slice(1).map(r => ({ code: r.querySelector('[name=code]').value, desc: r.querySelector('[name=desc]').value, qty: +r.querySelector('[name=qty]').value, price: +r.querySelector('[name=price]').value })).filter(i => (i.code || i.desc) && i.qty > 0);
     if (!items.length) return toast('Add at least one item');
-    const tot = items.reduce((a, i) => a + i.qty * i.price, 0), bid = addBill(d.party, d.date, items, Math.min(Math.max(+d.paid || 0, 0), tot), d.delivery); save(); sel.customer = d.party; go('bills'); invoiceModal(bid);
+    const kind = e.target.dataset.kind; if (P(d.party)?.type !== kind) return toast('Pick a ' + (kind === 'vendor' ? 'supplier' : 'customer'));
+    const tot = items.reduce((a, i) => a + i.qty * i.price, 0), bid = addBill(d.party, d.date, items, Math.min(Math.max(+d.paid || 0, 0), tot), d.delivery); save(); sel[kind] = d.party; billFilter = kind; go('bills'); invoiceModal(bid);
   }
   if (f === 'createReturn') {
     const lines = returnLines(d.party), picks = [...document.querySelectorAll('.rq')].map(x => ({ l: lines[+x.dataset.i], q: parseFloat(x.value) || 0 })).filter(x => x.q > 0);

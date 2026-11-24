@@ -121,3 +121,6 @@ tr.overdue td{background:#fde8e988}tr.overdue td:first-child{border-left:4px sol
 .sug-box:empty{display:none}
 .sug{padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--line)}.sug:hover{background:#fdf1c8}.sug small{color:var(--mut);float:right}
 .sug.new{color:#17804f;font-weight:600}
+
+#side .brand b.bn span{font-size:inherit;letter-spacing:normal}
+#side .brand b.bn{font-size:17px;letter-spacing:.5px;white-space:nowrap}
