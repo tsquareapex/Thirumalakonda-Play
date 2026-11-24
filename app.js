@@ -347,6 +347,25 @@ async function sharePdf(doc, name, text, phone) {
   doc.save(name); window.open(waLink(phone, text), '_blank'); toast('PDF downloaded - attach it in the WhatsApp chat that opened');
 }
 
+/* Automatic WhatsApp (server function -> WhatsApp Business Cloud API) with fallback to manual share */
+async function sendWhatsApp(doc, filename, text, party, kind) {
+  const digits = String(party.phone || '').replace(/\D/g, '').slice(-10);
+  if (digits.length !== 10) return toast('No valid mobile number saved for ' + party.name);
+  if (!confirm(`Send "${filename}" to ${party.name} on WhatsApp (${digits}) from ${SHOP.owner}?`)) return;
+  toast('Sending on WhatsApp...');
+  let err = '';
+  try {
+    const { data, error } = await sb.functions.invoke('send-whatsapp', { body: { to: '91' + digits, name: party.name, text, filename, pdf: doc.output('datauristring').split(',')[1] } });
+    if (error) err = error.message || 'Function not available'; else if (!data?.ok) err = data?.error || 'Unknown error'; else {
+      sb.from('message_log').insert({ party_id: party.id, kind, body: text.slice(0, 500), channel: 'whatsapp' }).then(() => {});
+      return toast(`Sent to ${party.name} on WhatsApp \u2713`);
+    }
+  } catch (e) { err = e.message || String(e); }
+  console.warn('WhatsApp auto-send failed:', err);
+  toast('Auto-send not available (' + err.slice(0, 80) + ') - opening WhatsApp manually');
+  setTimeout(() => sharePdf(doc, filename, text, party.phone), 1200);
+}
+
 function invoiceHtml(b) {
   const p = P(b.partyId);
   return `<div class="inv"><div class="hd"><div><h2>${SHOP.name}</h2>Plywood &amp; Interior Materials · 📞 ${SHOP.owner}</div><div style="text-align:right"><b>${p.type === 'vendor' ? 'PURCHASE BILL' : 'INVOICE'}</b><br>${b.id}<br>${fmtD(b.date)}</div></div>
@@ -362,8 +381,8 @@ function invoiceModal(id) {
   const msg = p.type === 'vendor' ? `Dear ${p.name}, ${SHOP.name} has recorded purchase bill ${b.id} dated ${fmtD(b.date)} for ${inr(b.total)}. Paid: ${inr(paidOf(b))}, Balance payable: ${inr(dueOf(b))}.`
     : `Dear ${p.name}, thank you for shopping at ${SHOP.name}. Your bill ${b.id} dated ${fmtD(b.date)} for ${inr(b.total)} is ready. Paid: ${inr(paidOf(b))}, Balance: ${inr(dueOf(b))}.`;
   modal(invoiceHtml(b) + `<p style="margin-top:12px"><button data-act="printInv" data-v="${id}">🖨 Print</button> <button class="ghost" data-act="pdfInv" data-v="${id}">⬇ Download PDF</button>
-   <button class="wa" data-act="shareInv" data-v="${id}">WhatsApp (PDF)</button></p><div class="msg">${esc(msg)}</div>
-   <p class="hint">On a phone, "WhatsApp (PDF)" shares the PDF file directly. On a computer the PDF downloads and WhatsApp opens - attach the file in the chat. Fully automatic sending will come with the WhatsApp Business connection.</p>`);
+   <button class="wa" data-act="shareInv" data-v="${id}">Send on WhatsApp (PDF)</button></p><div class="msg">${esc(msg)}</div>
+   <p class="hint">"Send on WhatsApp" sends the PDF automatically from ${SHOP.owner} to the customer or supplier. If automatic sending is not set up yet, it opens WhatsApp so you can attach the downloaded PDF.</p>`);
 }
 function payModal(id) {
   const b = db.bills.find(x => x.id === id);
@@ -383,7 +402,7 @@ function statementModal(id) {
   <div class="scroll"><table style="margin-top:12px"><tr>${head.map((h, i) => `<th class="${i > 1 ? 'r' : ''}">${h}</th>`).join('')}</tr>
   ${rows.map(r => `<tr><td>${r[0]}</td><td>${esc(r[1])}</td><td class="r">${m(r[2])}</td><td class="r green">${m(r[3])}</td><td class="r"><b>${inr(r[4])}</b></td></tr>`).join('') || '<tr><td colspan=5 class="mut">No transactions yet</td></tr>'}</table></div>
   <h3 style="margin-top:14px">WhatsApp message (${p.type === 'vendor' ? 'payment update' : od.length ? 'overdue reminder' : 'statement'})</h3><div class="msg">${esc(msg)}</div>
-  <p class="hint">On a phone, the PDF is shared straight to WhatsApp. On a computer the PDF downloads and WhatsApp opens with this message - just attach the file. Automatic sending comes with the WhatsApp Business connection.</p>`);
+  <p class="hint">"Send on WhatsApp" sends this statement as a PDF automatically from ${SHOP.owner}. If automatic sending is not set up yet, it opens WhatsApp so you can attach the downloaded PDF.</p>`);
   window.__stMsg = msg;
 }
 /* ---------- Returns ---------- */
@@ -514,9 +533,9 @@ function showSug(inp) {
 const ACT = {
   rtab: v => { rpt.tab = v; render(); }, rprint: () => printDoc(reportDoc(reportData())), rpdf: () => { const r = reportData(); reportPdf(r).save(r.title.replace(/\W+/g, '-') + '.pdf'); }, rcsv: () => downloadCsv(reportData()),
   printInv: v => printDoc(invoiceDoc(db.bills.find(b => b.id === v))), pdfInv: v => invoicePdf(db.bills.find(b => b.id === v)).save(v + '.pdf'),
-  shareInv: v => { const b = db.bills.find(x => x.id === v), p = P(b.partyId); sharePdf(invoicePdf(b), v + '.pdf', `${SHOP.name} - ${p.type === 'vendor' ? 'purchase bill' : 'invoice'} ${v}: total ${inr(b.total)}, balance ${inr(dueOf(b))}. PDF attached.`, p.phone); },
+  shareInv: v => { const b = db.bills.find(x => x.id === v), p = P(b.partyId); sendWhatsApp(invoicePdf(b), v + '.pdf', `${SHOP.name} - ${p.type === 'vendor' ? 'purchase bill' : 'invoice'} ${v} dated ${fmtD(b.date)}: total ${inr(b.total)}, balance ${inr(dueOf(b))}. PDF attached.`, p, 'invoice'); },
   printSt: v => printDoc(statementDoc(v)), pdfSt: v => statementPdf(v).save('Statement-' + v + '.pdf'),
-  shareSt: v => sharePdf(statementPdf(v), 'Statement-' + v + '.pdf', window.__stMsg || 'Account statement attached.', P(v).phone),
+  shareSt: v => sendWhatsApp(statementPdf(v), 'Statement-' + v + '.pdf', window.__stMsg || 'Account statement attached.', P(v), 'statement'),
   go: v => go(v), billf: v => { billFilter = v; render(); }, closeModal, print: () => window.print(), addRow,
   pick: (v, el) => { sel[el.dataset.t] = v; render(); },
   pickPlace: (v, el) => { const f = el.closest('form'); f.querySelector('[name=city]').value = v; const st = el.dataset.s, sel = f.querySelector('select[name=state]'); if (sel && st && [...sel.options].some(o => o.value === st)) sel.value = st; $('#sug').innerHTML = ''; },
