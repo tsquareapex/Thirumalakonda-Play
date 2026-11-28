@@ -1,7 +1,7 @@
 /* Thirumalakonda Plywoods – demo web app (data stored in browser; Supabase schema in /supabase) */
 const $ = (s, r = document) => r.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const inr = n => '₹' + Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+const inr = n => (n < 0 ? '-₹' : '₹') + Math.abs(Number(n || 0)).toLocaleString('en-IN', { maximumFractionDigits: 2 });
 const today = () => new Date().toISOString().slice(0, 10);
 const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x.toISOString().slice(0, 10); };
 const fmtD = d => d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '';
@@ -107,73 +107,153 @@ function render() {
   $('#nav').innerHTML = NAV.map(([k, l]) => `<a class="${k === page ? 'on' : ''}" data-act="go" data-v="${k}">${l}</a>`).join('');
   $('#title').textContent = (NAV.find(n => n[0] === page) || [])[1]?.replace(/^\S+\s/, '') || '';
   $('#topact').innerHTML = `<span class="mut">${fmtD(today())}</span>`;
+  const tp = $('#tip'); if (tp) tp.style.display = 'none';
   $('#view').innerHTML = ({ dash: vDash, customers: () => vParties('customer'), vendors: () => vParties('vendor'), sdash: vSDash, bill: () => vBill('customer'), sbill: () => vBill('vendor'), bills: vBills,
     returns: vReturns, route: vRoute, staff: vStaff, reports: vReports })[page]();
   if (page === 'bill' || page === 'sbill') recalc();
 }
 
+/* ---------- Dashboard period (date range) ---------- */
+const PRESETS = [['tm', 'This month'], ['lm', 'Last month'], ['m3', 'Last 3 months'], ['m6', 'Last 6 months'], ['fy', 'This financial year'], ['all', 'All time']];
+const per = { key: 'tm', from: '', to: '' };
+const ym = (d, back = 0) => new Date(Date.UTC(+d.slice(0, 4), +d.slice(5, 7) - 1 - back, 1)).toISOString().slice(0, 7);
+const monthEnd = m => new Date(Date.UTC(+m.slice(0, 4), +m.slice(5, 7), 0)).toISOString().slice(0, 10);
+const monthName = (m, o = { month: 'long', year: 'numeric' }) => new Date(m + '-01T00:00:00Z').toLocaleDateString('en-IN', { ...o, timeZone: 'UTC' });
+const allDates = () => [...db.bills.flatMap(b => [b.date, ...b.pays.map(p => p.date)]), ...db.returns.map(r => r.date)].filter(Boolean).sort();
+function range() {
+  const t = today(), m = t.slice(0, 7), k = per.key;
+  if (k === 'custom') return { from: per.from, to: per.to };
+  if (k.length === 7) return { from: k + '-01', to: monthEnd(k) };
+  if (k === 'lm') return { from: ym(t, 1) + '-01', to: monthEnd(ym(t, 1)) };
+  if (k === 'm3' || k === 'm6') return { from: ym(t, k === 'm3' ? 2 : 5) + '-01', to: monthEnd(m) };
+  if (k === 'fy') { const y = +t.slice(0, 4) - (+t.slice(5, 7) < 4 ? 1 : 0); return { from: y + '-04-01', to: (y + 1) + '-03-31' }; }
+  if (k === 'all') { const d = allDates(); return { from: d[0] || t, to: d.length && d[d.length - 1] > t ? d[d.length - 1] : t }; }
+  return { from: m + '-01', to: monthEnd(m) };
+}
+const inRange = (d, r) => d >= r.from && d <= r.to;
+const periodText = r => fmtD(r.from) + ' – ' + fmtD(r.to);
+function periodBar() {
+  const r = range(), months = [...allDates().map(d => d.slice(0, 7))];
+  for (let i = 0; i < 12; i++) months.push(ym(today(), i));
+  const opts = [...new Set(months)].sort().reverse().map(m => `<option value="${m}" ${per.key === m ? 'selected' : ''}>${monthName(m)}</option>`).join('');
+  return `<div class="card period"><div class="rtabs">${PRESETS.map(([k, l]) => `<button class="sm ${per.key === k ? '' : 'ghost'}" data-act="period" data-v="${k}">${l}</button>`).join('')}</div>
+  <div class="row" style="margin-top:10px"><div><label>Month wise</label><select data-input="pmonth"><option value="">— pick a month —</option>${opts}</select></div>
+  <div><label>From date</label><input type="date" id="pfrom" value="${r.from}"></div><div><label>To date</label><input type="date" id="pto" value="${r.to}"></div>
+  <div style="flex:0 0 auto"><button data-act="periodApply">Apply range</button></div></div>
+  <p class="showing">Showing: <b>${periodText(r)}</b></p></div>`;
+}
+/* figures for one party inside a date range: bills and returns by their date, payments by the date paid */
+function rangeLedger(pid, r) {
+  const l = ledger(pid);
+  const bills = l.bills.filter(b => inRange(b.date, r)), rets = l.rets.filter(x => inRange(x.date, r));
+  const pays = l.bills.flatMap(b => b.pays).filter(p => inRange(p.date, r));
+  const total = bills.reduce((s, b) => s + b.total, 0), paid = pays.reduce((s, p) => s + p.amt, 0), ret = rets.reduce((s, x) => s + x.amount, 0);
+  const od = bills.filter(isOver);
+  return { bills, rets, pays, total, paid, ret, balance: total - paid - ret, overdue: od.reduce((s, b) => s + dueOf(b), 0),
+    isOver: od.length > 0 && l.balance > 0, active: !!(bills.length || rets.length || pays.length), outstanding: l.balance };
+}
+
+/* ---------- dashboard charts ---------- */
+const SERIES = { total: '#2a78d6', paid: '#1baf7a', ret: '#eb6834' };
+const shortInr = n => { const f = (v, u) => '₹' + +v.toFixed(2) + u; return n >= 1e7 ? f(n / 1e7, 'Cr') : n >= 1e5 ? f(n / 1e5, 'L') : n >= 1e3 ? f(n / 1e3, 'K') : f(n, ''); };
+const niceMax = v => { if (v <= 0) return 100; const p = 10 ** Math.floor(Math.log10(v)); return [1, 2, 2.5, 4, 5, 8, 10].map(x => x * p).find(x => x >= v); };
+/* one bar group per day for ranges up to 45 days, otherwise one per month */
+function buckets(r, L) {
+  const daily = (new Date(r.to) - new Date(r.from)) / 864e5 < 45, list = [];
+  if (daily) for (let d = r.from; d <= r.to; d = addDays(d, 1)) list.push({ k: d, label: String(+d.slice(8)), name: fmtD(d) });
+  else for (let m = r.from.slice(0, 7); m <= r.to.slice(0, 7); m = ym(m + '-01', -1)) list.push({ k: m, label: monthName(m, { month: 'short', year: '2-digit' }), name: monthName(m) });
+  const map = new Map(list.map(b => [b.k, Object.assign(b, { total: 0, paid: 0, ret: 0 })]));
+  const add = (d, key, v) => { const b = map.get(daily ? d : d.slice(0, 7)); if (b) b[key] += v; };
+  L.forEach(({ l }) => { l.bills.forEach(b => add(b.date, 'total', b.total)); l.pays.forEach(p => add(p.date, 'paid', p.amt)); l.rets.forEach(x => add(x.date, 'ret', x.amount)); });
+  return { daily, list };
+}
+function trendChart(r, L, names) {
+  const keys = Object.keys(names), { daily, list } = buckets(r, L);
+  const title = names.total + ' vs ' + keys.slice(1).map(k => names[k]).join(' & ') + (daily ? ' — day wise' : ' — month wise');
+  if (!list.some(b => keys.some(k => b[k]))) return `<div class="card"><h3>${title}</h3><p class="mut">No transactions between ${periodText(r)}. Pick another period above.</p></div>`;
+  const max = niceMax(Math.max(...list.flatMap(b => keys.map(k => b[k])))), step = daily && list.length > 16 ? 2 : 1;
+  return `<div class="card"><h3>${title}</h3>
+  <div class="legend">${keys.map(k => `<span><i style="background:${SERIES[k]}"></i>${names[k]}</span>`).join('')}</div>
+  <div class="chart"><div class="yaxis">${[4, 3, 2, 1, 0].map(i => `<span style="bottom:${i * 25}%">${shortInr(max * i / 4)}</span>`).join('')}</div>
+  <div class="scroll plotwrap"><div style="min-width:${list.length * (daily ? 20 : 54)}px">
+  <div class="plot">${[1, 2, 3, 4].map(i => `<em style="bottom:${i * 25}%"></em>`).join('')}
+  ${list.map(b => `<div class="bgroup" tabindex="0" data-tip="${esc([b.name, ...keys.map(k => names[k] + ': ' + inr(b[k]))].join('\n'))}">${keys.map(k => `<i style="height:${b[k] / max * 100}%;background:${SERIES[k]}${b[k] > 0 ? ';min-height:2px' : ''}"></i>`).join('')}</div>`).join('')}</div>
+  <div class="xaxis">${list.map((b, i) => `<span>${i % step ? '' : b.label}</span>`).join('')}</div></div></div></div>
+  <details><summary>View as table</summary><div class="scroll"><table><tr><th>${daily ? 'Date' : 'Month'}</th>${keys.map(k => `<th class="r">${names[k]}</th>`).join('')}</tr>
+  ${list.filter(b => keys.some(k => b[k])).map(b => `<tr><td>${b.name}</td>${keys.map(k => `<td class="r">${inr(b[k])}</td>`).join('')}</tr>`).join('')}</table></div></details></div>`;
+}
+function topChart(title, L, color, empty) {
+  const top = L.filter(x => x.l.total > 0).sort((a, b) => b.l.total - a.l.total).slice(0, 5), max = top.length ? top[0].l.total : 1;
+  return `<div class="card"><h3>${title}</h3>${top.map(x => `<div class="hbar"><span title="${esc(x.p.name)}">${esc(x.p.name)}</span><b>${inr(x.l.total)}</b><div><i style="width:${x.l.total / max * 100}%;background:${color}"></i></div></div>`).join('') || `<p class="mut">${empty}</p>`}</div>`;
+}
+
 /* ---------- Supplier dashboard ---------- */
 function vSDash() {
-  const vs = db.parties.filter(p => p.type === 'vendor'), L = vs.map(v => ({ v, l: ledger(v.id) }));
-  const sum = k => L.reduce((t, x) => t + x.l[k], 0), od = L.filter(x => x.l.isOver);
-  const pend = db.bills.filter(b => b.delivery === 'Pending' && P(b.partyId)?.type === 'vendor');
-  const recent = db.bills.filter(b => P(b.partyId)?.type === 'vendor').slice(-6).reverse();
-  return `
+  const r = range(), vs = db.parties.filter(p => p.type === 'vendor'), L = vs.map(p => ({ p, l: rangeLedger(p.id, r) }));
+  const sum = k => L.reduce((t, x) => t + x.l[k], 0), od = L.filter(x => x.l.overdue > 0);
+  const bills = L.flatMap(x => x.l.bills);
+  const pend = bills.filter(b => b.delivery === 'Pending');
+  const recent = bills.slice().sort((a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id)).slice(0, 10);
+  const hasRet = sum('ret') > 0, names = { total: 'Purchases', paid: 'Paid', ...(hasRet ? { ret: 'Returns' } : {}) };
+  return periodBar() + `
   <div class="grid g4">
-    <div class="card kpi"><small>Total Purchases</small><b>${inr(sum('total'))}</b></div>
-    <div class="card kpi green"><small>Paid to Suppliers</small><b>${inr(sum('paid'))}</b></div>
-    <div class="card kpi red"><small>Overdue Payable</small><b>${inr(sum('overdue'))}</b><small>${od.length} supplier(s)</small></div>
-    <div class="card kpi"><small>Net Payable</small><b>${inr(sum('balance'))}</b></div>
-    <div class="card kpi"><small>Goods Awaiting Receipt</small><b>${pend.length}</b></div>
-    <div class="card kpi"><small>Suppliers</small><b>${vs.length}</b></div>
+    <div class="card kpi"><small>Total Purchases</small><b>${inr(sum('total'))}</b><small>${bills.length} bill(s)</small></div>
+    <div class="card kpi green"><small>Paid to Suppliers</small><b>${inr(sum('paid'))}</b><small>payments made in period</small></div>
+    <div class="card kpi red"><small>Overdue Payable</small><b>${inr(sum('overdue'))}</b><small>${od.length} supplier(s) · period's bills</small></div>
+    <div class="card kpi"><small>Net Payable</small><b>${inr(sum('balance'))}</b><small>purchases − paid${hasRet ? ' − returns' : ''}</small></div>
+    <div class="card kpi"><small>Goods Awaiting Receipt</small><b>${pend.length}</b><small>from period's bills</small></div>
+    <div class="card kpi"><small>Active Suppliers</small><b>${L.filter(x => x.l.active).length}</b><small>of ${vs.length} total</small></div>
   </div>
+  <div class="grid gch" style="margin-top:14px">${trendChart(r, L, names)}${topChart('Top 5 suppliers by purchases', L, SERIES.total, 'No purchases in this period.')}</div>
   <div class="grid g2" style="margin-top:14px">
     <div class="card"><h3>Suppliers — select to see full picture</h3>
       <input placeholder="🔍 Search name / code / city" value="${esc(filt)}" data-input="filt">
-      <div class="plist" style="margin-top:8px">${partyList(vs, 'vendor')}</div></div>
-    <div class="card" id="detail">${sel.vendor ? partyDetail(sel.vendor) : '<p class="mut">👈 Pick a supplier to see purchases, paid, overdue payable and bill history.</p>'}</div>
+      <div class="plist" style="margin-top:8px">${partyList(vs, 'vendor', r)}</div></div>
+    <div class="card" id="detail">${sel.vendor ? partyDetail(sel.vendor, r) : '<p class="mut">👈 Pick a supplier to see purchases, paid, overdue payable and bill history.</p>'}</div>
   </div>
-  <div class="card scroll" style="margin-top:14px"><h3>Recent supplier bills</h3><table><tr><th>Bill</th><th>Date</th><th>Supplier</th><th class="r">Total</th><th class="r">Paid</th><th class="r">Due</th><th></th></tr>
+  <div class="card scroll" style="margin-top:14px"><h3>Recent supplier bills in this period</h3><table><tr><th>Bill</th><th>Date</th><th>Supplier</th><th class="r">Total</th><th class="r">Paid</th><th class="r">Due</th><th></th></tr>
   ${recent.map(b => `<tr class="${isOver(b) ? 'overdue' : ''}"><td>${b.id}</td><td>${fmtD(b.date)}</td><td>${esc(P(b.partyId)?.name)}</td><td class="r">${inr(b.total)}</td><td class="r">${inr(paidOf(b))}</td><td class="r">${inr(dueOf(b))}</td>
-  <td>${dueOf(b) > 0 ? `<button class="sm" data-act="pay" data-v="${b.id}">Pay</button> ` : tag('Paid', 'green')}<button class="sm ghost" data-act="invoice" data-v="${b.id}">View</button></td></tr>`).join('') || '<tr><td colspan=7 class="mut">No supplier bills yet</td></tr>'}</table></div>`;
+  <td>${dueOf(b) > 0 ? `<button class="sm" data-act="pay" data-v="${b.id}">Pay</button> ` : tag('Paid', 'green')}<button class="sm ghost" data-act="invoice" data-v="${b.id}">View</button></td></tr>`).join('') || '<tr><td colspan=7 class="mut">No supplier bills in this period</td></tr>'}</table></div>`;
 }
 
 /* ---------- Customer dashboard ---------- */
 function vDash() {
-  const cs = db.parties.filter(p => p.type === 'customer'), L = cs.map(c => ({ c, l: ledger(c.id) }));
+  const r = range(), cs = db.parties.filter(p => p.type === 'customer'), L = cs.map(p => ({ p, l: rangeLedger(p.id, r) }));
   const sum = k => L.reduce((s, x) => s + x.l[k], 0);
-  const od = L.filter(x => x.l.isOver), pendRet = db.returns.filter(r => r.status === 'Pending Pickup');
-  const pendDel = db.bills.filter(b => b.delivery === 'Pending' && P(b.partyId)?.type === 'customer');
-  const vl = db.parties.filter(p => p.type === 'vendor').map(v => ledger(v.id));
-  return `
+  const od = L.filter(x => x.l.overdue > 0), bills = L.flatMap(x => x.l.bills);
+  const rets = L.flatMap(x => x.l.rets), pendRet = rets.filter(x => x.status === 'Pending Pickup');
+  const pendDel = bills.filter(b => b.delivery === 'Pending');
+  return periodBar() + `
   <div class="grid g4">
-    <div class="card kpi"><small>Total Sales</small><b>${inr(sum('total'))}</b></div>
-    <div class="card kpi green"><small>Collected</small><b>${inr(sum('paid'))}</b></div>
-    <div class="card kpi red"><small>Overdue Amount</small><b>${inr(sum('overdue'))}</b><small>${od.length} customer(s)</small></div>
-    <div class="card kpi"><small>Net Balance (after returns)</small><b>${inr(sum('balance'))}</b></div>
+    <div class="card kpi"><small>Total Sales</small><b>${inr(sum('total'))}</b><small>${bills.length} bill(s)</small></div>
+    <div class="card kpi green"><small>Collected</small><b>${inr(sum('paid'))}</b><small>payments received in period</small></div>
+    <div class="card kpi"><small>Returns Value</small><b>${inr(sum('ret'))}</b><small>${rets.length} return(s)</small></div>
+    <div class="card kpi"><small>Net Balance (after returns)</small><b>${inr(sum('balance'))}</b><small>sales − collected − returns</small></div>
+    <div class="card kpi red"><small>Overdue Amount</small><b>${inr(sum('overdue'))}</b><small>${od.length} customer(s) · period's bills</small></div>
     <div class="card kpi"><small>Returns Pending Pickup</small><b>${pendRet.length}</b><small>${pendRet.filter(retDelayed).length} delayed</small></div>
-    <div class="card kpi"><small>Deliveries Pending</small><b>${pendDel.length}</b></div>
-    <div class="card kpi"><small>Customers</small><b>${cs.length}</b></div>
-    <div class="card kpi"><small>Employees</small><b>${db.employees.length}</b></div>
+    <div class="card kpi"><small>Deliveries Pending</small><b>${pendDel.length}</b><small>from period's bills</small></div>
+    <div class="card kpi"><small>Active Customers</small><b>${L.filter(x => x.l.active).length}</b><small>of ${cs.length} total</small></div>
   </div>
+  <div class="grid gch" style="margin-top:14px">${trendChart(r, L, { total: 'Sales', paid: 'Collected', ret: 'Returns' })}${topChart('Top 5 customers by sales', L, SERIES.total, 'No sales in this period.')}</div>
   <div class="grid g2" style="margin-top:14px">
     <div class="card"><h3>Customers — select to see full picture</h3>
       <input placeholder="🔍 Search name / code / town" value="${esc(filt)}" data-input="filt">
-      <div class="plist" style="margin-top:8px">${partyList(cs, 'customer')}</div></div>
-    <div class="card" id="detail">${sel.customer ? partyDetail(sel.customer) : '<p class="mut">👈 Pick a customer to see paid, overdue, total business, returns and history.</p>'}</div>
+      <div class="plist" style="margin-top:8px">${partyList(cs, 'customer', r)}</div></div>
+    <div class="card" id="detail">${sel.customer ? partyDetail(sel.customer, r) : '<p class="mut">👈 Pick a customer to see paid, overdue, total business, returns and history.</p>'}</div>
   </div>`;
 }
-function partyList(arr, type) {
+/* r (date range) is passed by the dashboards only; Customers / Suppliers pages show all dates */
+function partyList(arr, type, r) {
   const f = filt.toLowerCase();
   return arr.filter(p => !f || (p.name + p.id + p.city).toLowerCase().includes(f)).map(p => {
-    const l = ledger(p.id);
+    const l = r ? rangeLedger(p.id, r) : ledger(p.id);
     return `<div class="pitem ${l.isOver ? 'od' : ''} ${sel[type] === p.id ? 'sel' : ''}" data-act="pick" data-t="${type}" data-v="${p.id}">
       <div><b>${esc(p.name)}</b><br><small class="mut">${p.id} · ${esc(p.city)}</small></div>
-      <div class="r"><b class="${l.isOver ? 'red' : ''}">${inr(l.balance)}</b><br>${l.isOver ? tag('OVERDUE', 'red') : l.balance <= 0 ? tag('Clear', 'green') : ''}</div></div>`;
+      <div class="r"><b class="${l.isOver ? 'red' : ''}">${inr(l.balance)}</b><br>${l.isOver ? tag('OVERDUE', 'red') : r && !l.active ? '<small class="mut">No activity</small>' : l.balance <= 0 ? tag('Clear', 'green') : ''}</div></div>`;
   }).join('') || '<p class="mut">No records.</p>';
 }
-function partyDetail(id) {
-  const p = P(id), l = ledger(id), isC = p.type === 'customer';
+function partyDetail(id, r) {
+  const p = P(id), l = r ? rangeLedger(id, r) : ledger(id), isC = p.type === 'customer';
   return `<div class="row" style="align-items:center"><div><h3 style="margin:0">${esc(p.name)} ${l.isOver ? tag('OVERDUE', 'red') : ''}</h3>
     <span class="mut">${p.id} · ${esc(p.address)} ${esc(p.city)}, ${esc(p.state)}<br>📞 ${esc(p.phone || '—')} ${p.email ? '· ✉ ' + esc(p.email) : ''} · Tolerance ${p.tol} days</span></div>
     <div class="r"><button class="sm" data-act="statement" data-v="${id}">Statement / Link</button> <button class="sm ghost" data-act="editParty" data-v="${id}">Edit</button></div></div>
@@ -183,10 +263,11 @@ function partyDetail(id) {
     <div class="card kpi ${l.overdue ? 'red' : ''}"><small>Overdue</small><b>${inr(l.overdue)}</b></div>
     ${isC ? `<div class="card kpi"><small>Returns credited</small><b>${inr(l.ret)}</b></div>` : `<div class="card kpi"><small>Bills</small><b>${l.bills.length}</b></div>`}
   </div>
-  <p style="font-size:18px">Balance ${isC ? 'to receive' : 'to pay'}: <b class="${l.balance > 0 ? 'red' : 'green'}">${inr(l.balance)}</b></p>
+  <p style="font-size:18px">${r ? 'Balance for this period' : 'Balance ' + (isC ? 'to receive' : 'to pay')}: <b class="${l.balance > 0 ? 'red' : 'green'}">${inr(l.balance)}</b></p>
+  ${r ? `<p class="hint">Outstanding today, all dates: <b>${inr(l.outstanding)}</b></p>` : ''}
   <div class="scroll"><table><tr><th>Bill</th><th>Date</th><th class="r">Total</th><th class="r">Paid</th><th class="r">Due</th><th></th></tr>
   ${l.bills.slice().reverse().map(b => `<tr class="${isOver(b) ? 'overdue' : ''}"><td>${b.id}</td><td>${fmtD(b.date)}</td><td class="r">${inr(b.total)}</td><td class="r">${inr(paidOf(b))}</td>
-    <td class="r">${inr(dueOf(b))}</td><td>${dueOf(b) > 0 ? `<button class="sm" data-act="pay" data-v="${b.id}">Pay</button> ` : tag('Paid', 'green')}<button class="sm ghost" data-act="invoice" data-v="${b.id}">View</button></td></tr>`).join('') || '<tr><td colspan=6 class="mut">No bills yet</td></tr>'}</table></div>
+    <td class="r">${inr(dueOf(b))}</td><td>${dueOf(b) > 0 ? `<button class="sm" data-act="pay" data-v="${b.id}">Pay</button> ` : tag('Paid', 'green')}<button class="sm ghost" data-act="invoice" data-v="${b.id}">View</button></td></tr>`).join('') || `<tr><td colspan=6 class="mut">${r ? 'No bills in this period' : 'No bills yet'}</td></tr>`}</table></div>
   ${l.rets.length ? `<h3 style="margin-top:14px">Returns</h3>` + l.rets.map(r => `<div>${r.id} · ${esc(r.item)} ×${r.qty} · ${inr(r.amount)} ${tag(r.status, r.status === 'Pending Pickup' ? 'gold' : 'green')}</div>`).join('') : ''}`;
 }
 
@@ -531,6 +612,8 @@ function showSug(inp) {
 
 /* ---------- events ---------- */
 const ACT = {
+  period: v => { per.key = v; render(); },
+  periodApply: () => { const from = $('#pfrom').value, to = $('#pto').value; if (!from || !to) return toast('Choose both From and To dates'); if (from > to) return toast('From date must be before To date'); if ((new Date(to) - new Date(from)) / 864e5 > 3660) return toast('Choose a range of 10 years or less'); Object.assign(per, { key: 'custom', from, to }); render(); },
   rtab: v => { rpt.tab = v; render(); }, rprint: () => printDoc(reportDoc(reportData())), rpdf: () => { const r = reportData(); reportPdf(r).save(r.title.replace(/\W+/g, '-') + '.pdf'); }, rcsv: () => downloadCsv(reportData()),
   printInv: v => printDoc(invoiceDoc(db.bills.find(b => b.id === v))), pdfInv: v => invoicePdf(db.bills.find(b => b.id === v)).save(v + '.pdf'),
   shareInv: v => { const b = db.bills.find(x => x.id === v), p = P(b.partyId); sendWhatsApp(invoicePdf(b), v + '.pdf', `${SHOP.name} - ${p.type === 'vendor' ? 'purchase bill' : 'invoice'} ${v} dated ${fmtD(b.date)}: total ${inr(b.total)}, balance ${inr(dueOf(b))}. PDF attached.`, p, 'invoice'); },
@@ -553,6 +636,7 @@ document.addEventListener('input', e => {
   if (k === 'filt') { filt = e.target.value; const pos = e.target.selectionStart; render(); const i = $('[data-input=filt]'); i.focus(); i.setSelectionRange(pos, pos); }
   if (k === 'rpt') { const t = e.target; rpt[t.dataset.k] = t.type === 'checkbox' ? t.checked : t.value; const pos = t.selectionStart, kk = t.dataset.k; render(); if (kk === 'q') { const i = $('[data-k=q]'); i.focus(); try { i.setSelectionRange(pos, pos); } catch (_) {} } }
   if (k === 'place') showSug(e.target);
+  if (k === 'pmonth' && e.target.value) { per.key = e.target.value; render(); }
   if (k === 'calc') recalc();
   if (k === 'fill') { const it = (window.__items || {})[e.target.value]; if (it) { const r = e.target.closest('tr'); r.querySelector('[name=desc]').value = it.desc; r.querySelector('[name=price]').value = it.price; recalc(); } }
   if (k === 'retParty') $('#retLines').innerHTML = retTable(e.target.value);
@@ -585,6 +669,14 @@ document.addEventListener('submit', e => {
     save(); render(); toast(`${picks.length} item(s) returned — balance reduced`);
   }
 });
+/* chart tooltip: hover, tap or keyboard focus on a bar group */
+const tip = document.body.appendChild(Object.assign(document.createElement('div'), { id: 'tip' }));
+const showTip = (el, x, y) => { if (!el) { tip.style.display = 'none'; return; } tip.textContent = el.dataset.tip; tip.style.display = 'block'; tip.style.left = Math.max(8, Math.min(x + 12, innerWidth - tip.offsetWidth - 8)) + 'px'; tip.style.top = Math.max(8, y - tip.offsetHeight - 10) + 'px'; };
+['pointermove', 'pointerdown'].forEach(ev => document.addEventListener(ev, e => showTip(e.target.closest?.('[data-tip]'), e.clientX, e.clientY)));
+document.addEventListener('focusin', e => { const el = e.target.closest?.('[data-tip]'); if (el) { const b = el.getBoundingClientRect(); showTip(el, b.left, b.top + 40); } });
+document.addEventListener('focusout', () => showTip(null));
+document.addEventListener('scroll', () => showTip(null), true);
+
 /* animated brand letters */
 document.querySelectorAll('[data-bn]').forEach(el => { el.innerHTML = [...el.dataset.bn].map((ch, i) => `<span style="--i:${i}">${ch}</span>`).join(''); });
 
