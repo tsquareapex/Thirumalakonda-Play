@@ -107,7 +107,6 @@ function render() {
   $('#nav').innerHTML = NAV.map(([k, l]) => `<a class="${k === page ? 'on' : ''}" data-act="go" data-v="${k}">${l}</a>`).join('');
   $('#title').textContent = (NAV.find(n => n[0] === page) || [])[1]?.replace(/^\S+\s/, '') || '';
   $('#topact').innerHTML = `<span class="mut">${fmtD(today())}</span>`;
-  const tp = $('#tip'); if (tp) tp.style.display = 'none';
   $('#view').innerHTML = ({ dash: vDash, customers: () => vParties('customer'), vendors: () => vParties('vendor'), sdash: vSDash, bill: () => vBill('customer'), sbill: () => vBill('vendor'), bills: vBills,
     returns: vReturns, route: vRoute, staff: vStaff, reports: vReports })[page]();
   if (page === 'bill' || page === 'sbill') recalc();
@@ -149,38 +148,47 @@ function rangeLedger(pid, r) {
   const pays = l.bills.flatMap(b => b.pays).filter(p => inRange(p.date, r));
   const total = bills.reduce((s, b) => s + b.total, 0), paid = pays.reduce((s, p) => s + p.amt, 0), ret = rets.reduce((s, x) => s + x.amount, 0);
   const od = bills.filter(isOver);
-  return { bills, rets, pays, total, paid, ret, balance: total - paid - ret, overdue: od.reduce((s, b) => s + dueOf(b), 0),
+  return { allRets: l.rets, bills, rets, pays, total, paid, ret, balance: total - paid - ret, overdue: od.reduce((s, b) => s + dueOf(b), 0),
     isOver: od.length > 0 && l.balance > 0, active: !!(bills.length || rets.length || pays.length), outstanding: l.balance };
 }
 
 /* ---------- dashboard charts ---------- */
-const SERIES = { total: '#2a78d6', paid: '#1baf7a', ret: '#eb6834' };
-const shortInr = n => { const f = (v, u) => '₹' + +v.toFixed(2) + u; return n >= 1e7 ? f(n / 1e7, 'Cr') : n >= 1e5 ? f(n / 1e5, 'L') : n >= 1e3 ? f(n / 1e3, 'K') : f(n, ''); };
-const niceMax = v => { if (v <= 0) return 100; const p = 10 ** Math.floor(Math.log10(v)); return [1, 2, 2.5, 4, 5, 8, 10].map(x => x * p).find(x => x >= v); };
-/* one bar group per day for ranges up to 45 days, otherwise one per month */
+const SERIES = { total: '#2a78d6', paid: '#1baf7a', ret: '#eb6834' }, STATUS = { paid: '#1baf7a', ret: '#eb6834', due: '#4a3aa7' };
+/* weeks for ranges up to 45 days, otherwise months */
 function buckets(r, L) {
-  const daily = (new Date(r.to) - new Date(r.from)) / 864e5 < 45, list = [];
-  if (daily) for (let d = r.from; d <= r.to; d = addDays(d, 1)) list.push({ k: d, label: String(+d.slice(8)), name: fmtD(d) });
-  else for (let m = r.from.slice(0, 7); m <= r.to.slice(0, 7); m = ym(m + '-01', -1)) list.push({ k: m, label: monthName(m, { month: 'short', year: '2-digit' }), name: monthName(m) });
-  const map = new Map(list.map(b => [b.k, Object.assign(b, { total: 0, paid: 0, ret: 0 })]));
-  const add = (d, key, v) => { const b = map.get(daily ? d : d.slice(0, 7)); if (b) b[key] += v; };
+  const weekly = (new Date(r.to) - new Date(r.from)) / 864e5 < 45, list = [], short = d => fmtD(d).slice(0, -5);
+  if (weekly) for (let d = r.from; d <= r.to; d = addDays(d, 7)) { const end = addDays(d, 6) < r.to ? addDays(d, 6) : r.to; list.push({ from: d, to: end, name: d === end ? short(d) : short(d) + ' – ' + short(end) }); }
+  else for (let m = r.from.slice(0, 7); m <= r.to.slice(0, 7); m = ym(m + '-01', -1)) list.push({ from: m + '-01', to: monthEnd(m), name: monthName(m) });
+  list.forEach(b => Object.assign(b, { total: 0, paid: 0, ret: 0 }));
+  const add = (d, key, v) => { const b = list.find(x => inRange(d, x)); if (b) b[key] += v; };
   L.forEach(({ l }) => { l.bills.forEach(b => add(b.date, 'total', b.total)); l.pays.forEach(p => add(p.date, 'paid', p.amt)); l.rets.forEach(x => add(x.date, 'ret', x.amount)); });
-  return { daily, list };
+  return { weekly, list };
 }
+/* one block per week / month with a labelled bar for each figure; empty periods are left out */
 function trendChart(r, L, names) {
-  const keys = Object.keys(names), { daily, list } = buckets(r, L);
-  const title = names.total + ' vs ' + keys.slice(1).map(k => names[k]).join(' & ') + (daily ? ' — day wise' : ' — month wise');
-  if (!list.some(b => keys.some(k => b[k]))) return `<div class="card"><h3>${title}</h3><p class="mut">No transactions between ${periodText(r)}. Pick another period above.</p></div>`;
-  const max = niceMax(Math.max(...list.flatMap(b => keys.map(k => b[k])))), step = daily && list.length > 16 ? 2 : 1;
-  return `<div class="card"><h3>${title}</h3>
-  <div class="legend">${keys.map(k => `<span><i style="background:${SERIES[k]}"></i>${names[k]}</span>`).join('')}</div>
-  <div class="chart"><div class="yaxis">${[4, 3, 2, 1, 0].map(i => `<span style="bottom:${i * 25}%">${shortInr(max * i / 4)}</span>`).join('')}</div>
-  <div class="scroll plotwrap"><div style="min-width:${list.length * (daily ? 20 : 54)}px">
-  <div class="plot">${[1, 2, 3, 4].map(i => `<em style="bottom:${i * 25}%"></em>`).join('')}
-  ${list.map(b => `<div class="bgroup" tabindex="0" data-tip="${esc([b.name, ...keys.map(k => names[k] + ': ' + inr(b[k]))].join('\n'))}">${keys.map(k => `<i style="height:${b[k] / max * 100}%;background:${SERIES[k]}${b[k] > 0 ? ';min-height:2px' : ''}"></i>`).join('')}</div>`).join('')}</div>
-  <div class="xaxis">${list.map((b, i) => `<span>${i % step ? '' : b.label}</span>`).join('')}</div></div></div></div>
-  <details><summary>View as table</summary><div class="scroll"><table><tr><th>${daily ? 'Date' : 'Month'}</th>${keys.map(k => `<th class="r">${names[k]}</th>`).join('')}</tr>
-  ${list.filter(b => keys.some(k => b[k])).map(b => `<tr><td>${b.name}</td>${keys.map(k => `<td class="r">${inr(b[k])}</td>`).join('')}</tr>`).join('')}</table></div></details></div>`;
+  const keys = Object.keys(names), { weekly, list } = buckets(r, L), used = list.filter(b => keys.some(k => b[k]));
+  const title = (weekly ? 'Week-wise ' : 'Month-wise ') + keys.map(k => names[k]).join(', ');
+  const max = Math.max(1, ...used.flatMap(b => keys.map(k => b[k])));
+  return `<div class="card" style="margin-top:14px"><h3>${title}</h3>
+  ${used.map(b => `<div class="pblock"><div class="pname">${b.name}</div><div>${keys.map(k => `<div class="pline"><span><i style="background:${SERIES[k]}"></i>${names[k]}</span>
+  <div class="ptrack"><em style="width:${b[k] / max * 100}%;background:${SERIES[k]}${b[k] > 0 ? ';min-width:3px' : ''}"></em></div><b>${inr(b[k])}</b></div>`).join('')}</div></div>`).join('') || `<p class="mut">No transactions between ${periodText(r)}. Pick another period above.</p>`}
+  ${used.length && used.length < list.length ? `<p class="hint">${weekly ? 'Weeks' : 'Months'} with no transactions are not shown.</p>` : ''}</div>`;
+}
+/* donut: where the money of the period's bills stands today (the three parts always add up to the bill total) */
+function statusChart(title, L, names) {
+  let total = 0, paid = 0, ret = 0;
+  L.forEach(({ l }) => l.bills.forEach(b => {
+    const back = Math.min(l.allRets.filter(x => x.billId === b.id).reduce((s, x) => s + x.amount, 0), b.total);
+    total += b.total; ret += back; paid += Math.min(paidOf(b), b.total - back);
+  }));
+  if (!total) return `<div class="card"><h3>${title}</h3><p class="mut">No bills in this period.</p></div>`;
+  const parts = [[names.paid, paid, STATUS.paid], [names.ret, ret, STATUS.ret], [names.due, total - paid - ret, STATUS.due]].filter(p => p[1] > 0.005 || p[0] !== names.ret);
+  let at = 0; const stops = parts.filter(p => p[1] > 0).map(([, v, c]) => { const a = at; at += v / total * 100; return `${c} ${a}% ${at}%`; });
+  const pct = v => { const x = v / total * 100; return x > 0 && x < 1 ? '<1%' : Math.round(x) + '%'; };
+  return `<div class="card"><h3>${title}</h3><div class="donutrow">
+  <div class="donut" role="img" aria-label="${esc(parts.map(([n, v]) => n + ' ' + inr(v)).join(', '))}" style="background:conic-gradient(${stops.join(',')})"><div><small>${names.total}</small><b>${inr(total)}</b></div></div>
+  <div class="dlist">${parts.map(([n, v, c]) => `<div><i style="background:${c}"></i><span>${n}<br><b>${inr(v)}</b></span><strong>${pct(v)}</strong></div>`).join('')}</div></div>
+  <p class="hint">Bills dated in this period, with all payments and returns recorded against them so far.</p></div>`;
 }
 function topChart(title, L, color, empty) {
   const top = L.filter(x => x.l.total > 0).sort((a, b) => b.l.total - a.l.total).slice(0, 5), max = top.length ? top[0].l.total : 1;
@@ -204,7 +212,8 @@ function vSDash() {
     <div class="card kpi"><small>Goods Awaiting Receipt</small><b>${pend.length}</b><small>from period's bills</small></div>
     <div class="card kpi"><small>Active Suppliers</small><b>${L.filter(x => x.l.active).length}</b><small>of ${vs.length} total</small></div>
   </div>
-  <div class="grid gch" style="margin-top:14px">${trendChart(r, L, names)}${topChart('Top 5 suppliers by purchases', L, SERIES.total, 'No purchases in this period.')}</div>
+  <div class="grid g2" style="margin-top:14px">${statusChart('Where this period\'s purchases stand', L, { total: 'Purchases', paid: 'Paid', ret: 'Returned', due: 'Still to pay' })}${topChart('Top 5 suppliers by purchases', L, SERIES.total, 'No purchases in this period.')}</div>
+  ${trendChart(r, L, names)}
   <div class="grid g2" style="margin-top:14px">
     <div class="card"><h3>Suppliers — select to see full picture</h3>
       <input placeholder="🔍 Search name / code / city" value="${esc(filt)}" data-input="filt">
@@ -234,7 +243,8 @@ function vDash() {
     <div class="card kpi"><small>Deliveries Pending</small><b>${pendDel.length}</b><small>from period's bills</small></div>
     <div class="card kpi"><small>Active Customers</small><b>${L.filter(x => x.l.active).length}</b><small>of ${cs.length} total</small></div>
   </div>
-  <div class="grid gch" style="margin-top:14px">${trendChart(r, L, { total: 'Sales', paid: 'Collected', ret: 'Returns' })}${topChart('Top 5 customers by sales', L, SERIES.total, 'No sales in this period.')}</div>
+  <div class="grid g2" style="margin-top:14px">${statusChart('Where this period\'s sales money stands', L, { total: 'Sales', paid: 'Received', ret: 'Returned', due: 'Still to collect' })}${topChart('Top 5 customers by sales', L, SERIES.total, 'No sales in this period.')}</div>
+  ${trendChart(r, L, { total: 'Sales', paid: 'Collected', ret: 'Returns' })}
   <div class="grid g2" style="margin-top:14px">
     <div class="card"><h3>Customers — select to see full picture</h3>
       <input placeholder="🔍 Search name / code / town" value="${esc(filt)}" data-input="filt">
@@ -669,14 +679,6 @@ document.addEventListener('submit', e => {
     save(); render(); toast(`${picks.length} item(s) returned — balance reduced`);
   }
 });
-/* chart tooltip: hover, tap or keyboard focus on a bar group */
-const tip = document.body.appendChild(Object.assign(document.createElement('div'), { id: 'tip' }));
-const showTip = (el, x, y) => { if (!el) { tip.style.display = 'none'; return; } tip.textContent = el.dataset.tip; tip.style.display = 'block'; tip.style.left = Math.max(8, Math.min(x + 12, innerWidth - tip.offsetWidth - 8)) + 'px'; tip.style.top = Math.max(8, y - tip.offsetHeight - 10) + 'px'; };
-['pointermove', 'pointerdown'].forEach(ev => document.addEventListener(ev, e => showTip(e.target.closest?.('[data-tip]'), e.clientX, e.clientY)));
-document.addEventListener('focusin', e => { const el = e.target.closest?.('[data-tip]'); if (el) { const b = el.getBoundingClientRect(); showTip(el, b.left, b.top + 40); } });
-document.addEventListener('focusout', () => showTip(null));
-document.addEventListener('scroll', () => showTip(null), true);
-
 /* animated brand letters */
 document.querySelectorAll('[data-bn]').forEach(el => { el.innerHTML = [...el.dataset.bn].map((ch, i) => `<span style="--i:${i}">${ch}</span>`).join(''); });
 
